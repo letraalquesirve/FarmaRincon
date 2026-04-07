@@ -16,3 +16,9 @@ npm-debug.*
 web-build/
 *.apk
 *.aab
+firebaseConfig.js
+tokenExpo.txt
+*.zip
+create-users.js
+cleanup-firebase.js
+create-categorias.js

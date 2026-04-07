@@ -41,11 +41,12 @@ import {
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 
-// Función para normalizar texto (quitar acentos y convertir a minúsculas)
+// Función para normalizar texto (quitar acentos, trim, convertir a minúsculas)
 const normalizeText = (text) => {
   if (!text) return '';
   return text
     .toLowerCase()
+    .trim()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 };
@@ -155,7 +156,6 @@ export default function SubtractScreen() {
     }
   };
 
-  // Búsqueda con normalización de acentos
   const searchMedicamentos = async (nombre, presentacion = '') => {
     try {
       const medicamentosRef = collection(db, 'medicamentos');
@@ -332,7 +332,14 @@ export default function SubtractScreen() {
               fecha: new Date().toISOString(),
               destino: despacho.destino,
               pedidoId: despacho.pedidoId,
-              items: [{ medicamentoId: selectedMed.id, nombre: selectedMed.nombre, presentacion: selectedMed.presentacion, cantidad: despacho.cantidad, vencimiento: selectedMed.vencimiento }],
+              items: [{
+                medicamentoId: selectedMed.id,
+                nombre: selectedMed.nombre,
+                presentacion: selectedMed.presentacion,
+                cantidad: despacho.cantidad,
+                vencimiento: selectedMed.vencimiento,
+                ubicacion: selectedMed.ubicacion || '', // Incluir ubicación
+              }],
               totalItems: 1,
               totalUnidades: despacho.cantidad,
             });
@@ -354,7 +361,14 @@ export default function SubtractScreen() {
             transaction.set(entregaRef, {
               fecha: new Date().toISOString(),
               destino: despacho.destino,
-              items: [{ medicamentoId: selectedMed.id, nombre: selectedMed.nombre, presentacion: selectedMed.presentacion, cantidad: despacho.cantidad, vencimiento: selectedMed.vencimiento }],
+              items: [{
+                medicamentoId: selectedMed.id,
+                nombre: selectedMed.nombre,
+                presentacion: selectedMed.presentacion,
+                cantidad: despacho.cantidad,
+                vencimiento: selectedMed.vencimiento,
+                ubicacion: selectedMed.ubicacion || '', // Incluir ubicación
+              }],
               totalItems: 1,
               totalUnidades: despacho.cantidad,
               esHuérfana: true,
@@ -518,6 +532,9 @@ export default function SubtractScreen() {
                       {isVencido ? 'VENCIDO' : `Vence: ${new Date(med.vencimiento).toLocaleDateString()}`}
                     </Text>
                   </View>
+                  {med.ubicacion && (
+                    <Text style={styles.resultUbicacion}>📍 {med.ubicacion}</Text>
+                  )}
                   {isVencido && <Text style={styles.vencidoWarning}>No se puede dar de baja medicamentos vencidos</Text>}
                 </View>
               </TouchableOpacity>
@@ -558,6 +575,9 @@ export default function SubtractScreen() {
         <View style={styles.medInfoCard}>
           <Text style={styles.medName}>{selectedMed?.nombre}</Text>
           <Text style={styles.medPresentation}>{selectedMed?.presentacion}</Text>
+          {selectedMed?.ubicacion && (
+            <Text style={styles.medUbicacion}>📍 {selectedMed.ubicacion}</Text>
+          )}
           <View style={styles.stockContainer}>
             <Text style={styles.stockLabel}>Stock inicial:</Text>
             <Text style={styles.stockValue}>{selectedMed?.cantidad} uds</Text>
@@ -755,12 +775,14 @@ const styles = StyleSheet.create({
   resultDetails: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   resultQuantity: { fontSize: 14, fontWeight: '600', color: '#374151' },
   resultExpiry: { fontSize: 12, color: '#6B7280' },
+  resultUbicacion: { fontSize: 12, color: '#10B981', marginTop: 4 },
   vencidoText: { color: '#DC2626', fontWeight: 'bold' },
   vencidoWarning: { marginTop: 8, fontSize: 12, color: '#DC2626', fontStyle: 'italic' },
   content: { flex: 1, padding: 16 },
   medInfoCard: { backgroundColor: 'white', padding: 16, borderRadius: 16, marginBottom: 16, elevation: 2 },
   medName: { fontSize: 20, fontWeight: 'bold', color: '#1F2937' },
   medPresentation: { fontSize: 14, color: '#6B7280', marginTop: 4 },
+  medUbicacion: { fontSize: 14, color: '#10B981', marginTop: 4 },
   stockContainer: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
   stockLabel: { fontSize: 14, color: '#6B7280' },
   stockValue: { fontSize: 16, fontWeight: 'bold', color: '#1F2937' },

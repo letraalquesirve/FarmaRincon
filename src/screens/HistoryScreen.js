@@ -13,13 +13,13 @@ import {
 } from 'react-native';
 import { db } from '../../firebaseConfig';
 import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
-import { 
-  History, 
-  Package, 
-  Calendar, 
-  User, 
-  ChevronDown, 
-  ChevronUp, 
+import {
+  History,
+  Package,
+  Calendar,
+  User,
+  ChevronDown,
+  ChevronUp,
   Pill,
   Users,
   MapPin,
@@ -27,18 +27,27 @@ import {
   Tag,
   Filter,
   X,
-  Check
+  Check,
+  UserCheck,
 } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 
-// Función para normalizar texto (quitar acentos y convertir a minúsculas)
+// Función para normalizar texto (quitar acentos, trim, convertir a minúsculas)
 const normalizeText = (text) => {
   if (!text) return '';
   return text
     .toLowerCase()
+    .trim()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+};
+
+// Función para formatear fecha para mostrar (DD/MM/YYYY)
+const formatDisplayDate = (dateString) => {
+  if (!dateString) return '';
+  const [year, month, day] = dateString.split('-');
+  return `${day}/${month}/${year}`;
 };
 
 export default function HistoryScreen() {
@@ -47,7 +56,7 @@ export default function HistoryScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
-  const [filter, setFilter] = useState('todas'); // todas, vinculadas, huerfanas
+  const [filter, setFilter] = useState('todas');
 
   // Estado de filtros
   const [showFilterModal, setShowFilterModal] = useState(false);
@@ -55,6 +64,7 @@ export default function HistoryScreen() {
     solicitante: '',
     medicamento: '',
     residencia: '',
+    destino: '', // NUEVO: receptor de la entrega
     fechaDesde: '',
     fechaHasta: '',
   });
@@ -62,38 +72,38 @@ export default function HistoryScreen() {
     solicitante: '',
     medicamento: '',
     residencia: '',
+    destino: '',
     fechaDesde: '',
     fechaHasta: '',
   });
-  const [showDatePicker, setShowDatePicker] = useState(null); // 'desde' o 'hasta'
+  const [showDatePicker, setShowDatePicker] = useState(null);
   const [activeFiltersCount, setActiveFiltersCount] = useState(0);
 
   useEffect(() => {
-    // Cargar entregas
-    const qEntregas = query(
-      collection(db, 'entregas'),
-      orderBy('fecha', 'desc'),
-      limit(100)
-    );
-    
+    const qEntregas = query(collection(db, 'entregas'), orderBy('fecha', 'desc'), limit(100));
+
     const unsubscribeEntregas = onSnapshot(qEntregas, (snapshot) => {
       const docs = [];
-      snapshot.forEach(d => {
+      snapshot.forEach((d) => {
         const data = d.data();
-        const items = data.items || [{
-          medicamentoId: data.medicamentoId,
-          nombre: data.nombre,
-          presentacion: data.presentacion,
-          cantidad: data.cantidad || 1,
-          vencimiento: data.vencimiento
-        }];
-        
-        docs.push({ 
-          id: d.id, 
+        const items = data.items || [
+          {
+            medicamentoId: data.medicamentoId,
+            nombre: data.nombre,
+            presentacion: data.presentacion,
+            cantidad: data.cantidad || 1,
+            vencimiento: data.vencimiento,
+            ubicacion: data.ubicacion || '',
+          },
+        ];
+
+        docs.push({
+          id: d.id,
           ...data,
           items: items,
-          totalUnidades: data.totalUnidades || items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
-          totalItems: data.totalItems || items.length
+          totalUnidades:
+            data.totalUnidades || items.reduce((sum, item) => sum + (item.cantidad || 1), 0),
+          totalItems: data.totalItems || items.length,
         });
       });
       setEntregas(docs);
@@ -101,11 +111,10 @@ export default function HistoryScreen() {
       setRefreshing(false);
     });
 
-    // Cargar pedidos para obtener información de solicitantes
     const qPedidos = query(collection(db, 'pedidos'), orderBy('fechaPedido', 'desc'));
     const unsubscribePedidos = onSnapshot(qPedidos, (snapshot) => {
       const docs = [];
-      snapshot.forEach(d => docs.push({ id: d.id, ...d.data() }));
+      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
       setPedidos(docs);
     });
 
@@ -130,35 +139,30 @@ export default function HistoryScreen() {
     });
   };
 
-  const formatDateForFilter = (dateString) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toISOString().split('T')[0];
-  };
-
   const getPedidoInfo = (pedidoId) => {
-    return pedidos.find(p => p.id === pedidoId);
+    return pedidos.find((p) => p.id === pedidoId);
   };
 
   const getTotalPorEntrega = (entrega) => {
-    return entrega.items?.reduce((sum, item) => sum + (item.cantidad || 0), 0) || entrega.cantidad || 0;
+    return (
+      entrega.items?.reduce((sum, item) => sum + (item.cantidad || 0), 0) || entrega.cantidad || 0
+    );
   };
 
-  // Función para aplicar filtros a las entregas
   const getFilteredEntregas = () => {
     let filtered = [...entregas];
 
     // Filtro por tipo (vinculadas/huerfanas)
     if (filter === 'vinculadas') {
-      filtered = filtered.filter(e => e.pedidoId);
+      filtered = filtered.filter((e) => e.pedidoId);
     } else if (filter === 'huerfanas') {
-      filtered = filtered.filter(e => e.esHuérfana || (!e.pedidoId && !e.esHuérfana));
+      filtered = filtered.filter((e) => e.esHuérfana || (!e.pedidoId && !e.esHuérfana));
     }
 
-    // Filtro por solicitante (buscar en pedido vinculado)
+    // Filtro por solicitante (solo para entregas vinculadas a pedido)
     if (filters.solicitante.trim()) {
       const searchNorm = normalizeText(filters.solicitante);
-      filtered = filtered.filter(entrega => {
+      filtered = filtered.filter((entrega) => {
         if (!entrega.pedidoId) return false;
         const pedido = getPedidoInfo(entrega.pedidoId);
         if (!pedido) return false;
@@ -169,17 +173,15 @@ export default function HistoryScreen() {
     // Filtro por medicamento (buscar en items de la entrega)
     if (filters.medicamento.trim()) {
       const searchNorm = normalizeText(filters.medicamento);
-      filtered = filtered.filter(entrega => {
-        return entrega.items?.some(item => 
-          normalizeText(item.nombre).includes(searchNorm)
-        );
+      filtered = filtered.filter((entrega) => {
+        return entrega.items?.some((item) => normalizeText(item.nombre).includes(searchNorm));
       });
     }
 
-    // Filtro por residencia (buscar en pedido vinculado)
+    // Filtro por residencia (solo para entregas vinculadas a pedido)
     if (filters.residencia.trim()) {
       const searchNorm = normalizeText(filters.residencia);
-      filtered = filtered.filter(entrega => {
+      filtered = filtered.filter((entrega) => {
         if (!entrega.pedidoId) return false;
         const pedido = getPedidoInfo(entrega.pedidoId);
         if (!pedido) return false;
@@ -187,21 +189,31 @@ export default function HistoryScreen() {
       });
     }
 
-    // Filtro por fecha desde
+    // NUEVO: Filtro por destino (receptor de la entrega)
+    // Esto aplica TANTO para entregas vinculadas como para entregas directas
+    if (filters.destino.trim()) {
+      const searchNorm = normalizeText(filters.destino);
+      filtered = filtered.filter((entrega) => {
+        // El destino puede ser el nombre del solicitante (si es vinculada)
+        // o el destino libre ingresado manualmente (si es directa)
+        return normalizeText(entrega.destino || '').includes(searchNorm);
+      });
+    }
+
+    // Filtro por fecha de entrega (campo 'fecha' del documento entrega)
     if (filters.fechaDesde) {
       const desde = new Date(filters.fechaDesde);
       desde.setHours(0, 0, 0, 0);
-      filtered = filtered.filter(entrega => {
+      filtered = filtered.filter((entrega) => {
         const fechaEntrega = new Date(entrega.fecha);
         return fechaEntrega >= desde;
       });
     }
 
-    // Filtro por fecha hasta
     if (filters.fechaHasta) {
       const hasta = new Date(filters.fechaHasta);
       hasta.setHours(23, 59, 59, 999);
-      filtered = filtered.filter(entrega => {
+      filtered = filtered.filter((entrega) => {
         const fechaEntrega = new Date(entrega.fecha);
         return fechaEntrega <= hasta;
       });
@@ -210,36 +222,34 @@ export default function HistoryScreen() {
     return filtered;
   };
 
-  // Contar filtros activos
   const updateActiveFiltersCount = (filtros) => {
     let count = 0;
     if (filtros.solicitante.trim()) count++;
     if (filtros.medicamento.trim()) count++;
     if (filtros.residencia.trim()) count++;
+    if (filtros.destino.trim()) count++;
     if (filtros.fechaDesde) count++;
     if (filtros.fechaHasta) count++;
     setActiveFiltersCount(count);
   };
 
-  // Abrir modal de filtros
   const openFilterModal = () => {
     setTempFilters({ ...filters });
     setShowFilterModal(true);
   };
 
-  // Aplicar filtros
   const applyFilters = () => {
     setFilters({ ...tempFilters });
     updateActiveFiltersCount(tempFilters);
     setShowFilterModal(false);
   };
 
-  // Limpiar todos los filtros
   const clearFilters = () => {
     const emptyFilters = {
       solicitante: '',
       medicamento: '',
       residencia: '',
+      destino: '',
       fechaDesde: '',
       fechaHasta: '',
     };
@@ -249,16 +259,36 @@ export default function HistoryScreen() {
     setShowFilterModal(false);
   };
 
-  // Cambiar fecha en el modal
   const handleDateChange = (event, selectedDate, field) => {
     setShowDatePicker(null);
     if (selectedDate) {
-      const dateStr = selectedDate.toISOString().split('T')[0];
-      setTempFilters(prev => ({ ...prev, [field]: dateStr }));
+      const year = selectedDate.getFullYear();
+      const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+      const day = String(selectedDate.getDate()).padStart(2, '0');
+      const dateStr = `${year}-${month}-${day}`;
+
+      // Mapear el campo recibido ('desde' o 'hasta') a los nombres correctos en el estado
+      if (field === 'desde') {
+        setTempFilters((prev) => ({ ...prev, fechaDesde: dateStr }));
+      } else if (field === 'hasta') {
+        setTempFilters((prev) => ({ ...prev, fechaHasta: dateStr }));
+      }
     }
   };
 
   const filteredEntregas = getFilteredEntregas();
+
+  // Cambiar el estado de expandedId (de string a array)
+  const [expandedIds, setExpandedIds] = useState([]);
+
+  // Función para toggle de expansión
+  const toggleExpand = (id) => {
+    if (expandedIds.includes(id)) {
+      setExpandedIds(expandedIds.filter((item) => item !== id));
+    } else {
+      setExpandedIds([...expandedIds, id]);
+    }
+  };
 
   if (loading) {
     return (
@@ -270,11 +300,9 @@ export default function HistoryScreen() {
   }
 
   return (
-    <ScrollView 
+    <ScrollView
       style={styles.container}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      }
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
       <View style={styles.header}>
         <History color="#7C3AED" size={28} />
@@ -304,7 +332,9 @@ export default function HistoryScreen() {
           style={[styles.filterChip, filter === 'vinculadas' && styles.filterChipActive]}
           onPress={() => setFilter('vinculadas')}
         >
-          <Text style={[styles.filterChipText, filter === 'vinculadas' && styles.filterChipTextActive]}>
+          <Text
+            style={[styles.filterChipText, filter === 'vinculadas' && styles.filterChipTextActive]}
+          >
             Vinculadas a pedidos
           </Text>
         </TouchableOpacity>
@@ -313,7 +343,9 @@ export default function HistoryScreen() {
           style={[styles.filterChip, filter === 'huerfanas' && styles.filterChipActive]}
           onPress={() => setFilter('huerfanas')}
         >
-          <Text style={[styles.filterChipText, filter === 'huerfanas' && styles.filterChipTextActive]}>
+          <Text
+            style={[styles.filterChipText, filter === 'huerfanas' && styles.filterChipTextActive]}
+          >
             Entregas directas
           </Text>
         </TouchableOpacity>
@@ -340,13 +372,13 @@ export default function HistoryScreen() {
           <Package color="#D1D5DB" size={64} />
           <Text style={styles.emptyTitle}>No hay entregas</Text>
           <Text style={styles.emptyText}>
-            {activeFiltersCount > 0 
-              ? 'No hay resultados con los filtros aplicados' 
-              : filter === 'vinculadas' 
-              ? 'No hay entregas vinculadas a pedidos' 
-              : filter === 'huerfanas'
-              ? 'No hay entregas directas'
-              : 'Las entregas que realices aparecerán aquí'}
+            {activeFiltersCount > 0
+              ? 'No hay resultados con los filtros aplicados'
+              : filter === 'vinculadas'
+                ? 'No hay entregas vinculadas a pedidos'
+                : filter === 'huerfanas'
+                  ? 'No hay entregas directas'
+                  : 'Las entregas que realices aparecerán aquí'}
           </Text>
           {activeFiltersCount > 0 && (
             <TouchableOpacity style={styles.clearAllButton} onPress={clearFilters}>
@@ -357,24 +389,26 @@ export default function HistoryScreen() {
       ) : (
         filteredEntregas.map((entrega) => {
           const totalUnidades = getTotalPorEntrega(entrega);
-          const isExpanded = expandedId === entrega.id;
+          const isExpanded = expandedIds.includes(entrega.id);
           const pedidoInfo = entrega.pedidoId ? getPedidoInfo(entrega.pedidoId) : null;
-          
+
+          // Determinar si la entrega es vinculada o directa para mostrar icono diferente
+          const isVinculada = !!entrega.pedidoId;
+
           return (
             <View key={entrega.id} style={styles.card}>
-              <TouchableOpacity
-                style={styles.cardHeader}
-                onPress={() => setExpandedId(isExpanded ? null : entrega.id)}
-              >
+              <TouchableOpacity style={styles.cardHeader} onPress={() => toggleExpand(entrega.id)}>
                 <View style={styles.cardHeaderLeft}>
                   <Calendar color="#6B7280" size={16} />
                   <Text style={styles.cardDate}>{formatDate(entrega.fecha)}</Text>
                 </View>
                 <View style={styles.cardHeaderRight}>
-                  <View style={[
-                    styles.badge,
-                    entrega.pedidoId ? styles.badgeVinculado : styles.badgeHuerfano
-                  ]}>
+                  <View
+                    style={[
+                      styles.badge,
+                      isVinculada ? styles.badgeVinculado : styles.badgeHuerfano,
+                    ]}
+                  >
                     <Text style={styles.badgeText}>{totalUnidades} uds</Text>
                   </View>
                   {isExpanded ? (
@@ -386,37 +420,26 @@ export default function HistoryScreen() {
               </TouchableOpacity>
 
               <View style={styles.cardBody}>
-                {/* Tipo de entrega */}
-                {entrega.pedidoId ? (
-                  <View style={styles.tipoContainer}>
-                    <Users color="#7C3AED" size={16} />
-                    <Text style={styles.tipoText}>Vinculada a pedido</Text>
-                  </View>
-                ) : (
-                  <View style={[styles.tipoContainer, styles.tipoHuerfano]}>
-                    <Package color="#6B7280" size={16} />
-                    <Text style={styles.tipoHuerfanoText}>Entrega directa (sin pedido)</Text>
-                  </View>
-                )}
-
-                {/* Destino */}
+                {/* Tipo de entrega y destino */}
                 <View style={styles.destinoContainer}>
-                  <User color="#6B7280" size={16} />
+                  {isVinculada ? (
+                    <Users color="#7C3AED" size={16} />
+                  ) : (
+                    <UserCheck color="#10B981" size={16} />
+                  )}
                   <Text style={styles.destinoLabel}>Destino:</Text>
                   <Text style={styles.destinoText}>{entrega.destino}</Text>
                 </View>
 
                 {/* Información del pedido si existe */}
-                {entrega.pedidoId && pedidoInfo && (
+                {isVinculada && pedidoInfo && (
                   <View style={styles.pedidoInfoContainer}>
                     <Text style={styles.pedidoInfoTitle}>Información del pedido:</Text>
-                    
                     <View style={styles.pedidoInfoRow}>
                       <Tag color="#6B7280" size={12} />
                       <Text style={styles.pedidoInfoLabel}>Solicitante:</Text>
                       <Text style={styles.pedidoInfoValue}>{pedidoInfo.nombreSolicitante}</Text>
                     </View>
-
                     {pedidoInfo.lugarResidencia && (
                       <View style={styles.pedidoInfoRow}>
                         <MapPin color="#6B7280" size={12} />
@@ -424,7 +447,6 @@ export default function HistoryScreen() {
                         <Text style={styles.pedidoInfoValue}>{pedidoInfo.lugarResidencia}</Text>
                       </View>
                     )}
-
                     {pedidoInfo.telefonoContacto && (
                       <View style={styles.pedidoInfoRow}>
                         <Phone color="#6B7280" size={12} />
@@ -438,7 +460,8 @@ export default function HistoryScreen() {
                 {/* Resumen rápido si no está expandido */}
                 {!isExpanded && entrega.items && entrega.items.length > 0 && (
                   <Text style={styles.itemsResume}>
-                    {entrega.items.length} {entrega.items.length === 1 ? 'medicamento' : 'medicamentos'}
+                    {entrega.items.length}{' '}
+                    {entrega.items.length === 1 ? 'medicamento' : 'medicamentos'}
                   </Text>
                 )}
 
@@ -454,6 +477,9 @@ export default function HistoryScreen() {
                           {item.presentacion && (
                             <Text style={styles.itemPresentation}>{item.presentacion}</Text>
                           )}
+                          {item.ubicacion && (
+                            <Text style={styles.itemUbicacion}>📍 {item.ubicacion}</Text>
+                          )}
                         </View>
                         <Text style={styles.itemQuantity}>x{item.cantidad || 1}</Text>
                       </View>
@@ -463,9 +489,7 @@ export default function HistoryScreen() {
 
                 {/* Totales */}
                 <View style={styles.totalsContainer}>
-                  <Text style={styles.totalItems}>
-                    Items: {entrega.items?.length || 1}
-                  </Text>
+                  <Text style={styles.totalItems}>Items: {entrega.items?.length || 1}</Text>
                   <Text style={styles.totalUnidades}>
                     Total: {totalUnidades} {totalUnidades === 1 ? 'unidad' : 'unidades'}
                   </Text>
@@ -477,11 +501,7 @@ export default function HistoryScreen() {
       )}
 
       {/* Modal de filtros */}
-      <Modal
-        visible={showFilterModal}
-        animationType="slide"
-        transparent={true}
-      >
+      <Modal visible={showFilterModal} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingScrollView style={styles.modalContent}>
             <View style={styles.modalHeader}>
@@ -492,14 +512,16 @@ export default function HistoryScreen() {
             </View>
 
             <View style={styles.filterForm}>
-              {/* Filtro por solicitante */}
+              {/* Filtro por solicitante (solo pedidos vinculados) */}
               <View style={styles.filterInputGroup}>
-                <Text style={styles.filterLabel}>Solicitante</Text>
+                <Text style={styles.filterLabel}>Solicitante (solo pedidos)</Text>
                 <TextInput
                   style={styles.filterInput}
                   placeholder="Nombre del solicitante..."
                   value={tempFilters.solicitante}
-                  onChangeText={(text) => setTempFilters(prev => ({ ...prev, solicitante: text }))}
+                  onChangeText={(text) =>
+                    setTempFilters((prev) => ({ ...prev, solicitante: text }))
+                  }
                 />
               </View>
 
@@ -510,44 +532,84 @@ export default function HistoryScreen() {
                   style={styles.filterInput}
                   placeholder="Nombre del medicamento..."
                   value={tempFilters.medicamento}
-                  onChangeText={(text) => setTempFilters(prev => ({ ...prev, medicamento: text }))}
+                  onChangeText={(text) =>
+                    setTempFilters((prev) => ({ ...prev, medicamento: text }))
+                  }
                 />
               </View>
 
-              {/* Filtro por residencia */}
+              {/* Filtro por residencia (solo pedidos vinculados) */}
               <View style={styles.filterInputGroup}>
-                <Text style={styles.filterLabel}>Residencia</Text>
+                <Text style={styles.filterLabel}>Residencia (solo pedidos)</Text>
                 <TextInput
                   style={styles.filterInput}
                   placeholder="Lugar de residencia..."
                   value={tempFilters.residencia}
-                  onChangeText={(text) => setTempFilters(prev => ({ ...prev, residencia: text }))}
+                  onChangeText={(text) => setTempFilters((prev) => ({ ...prev, residencia: text }))}
                 />
               </View>
 
+              {/* NUEVO: Filtro por destino (receptor de la entrega) */}
+              <View style={styles.filterInputGroup}>
+                <Text style={styles.filterLabel}>Destino (receptor)</Text>
+                <TextInput
+                  style={styles.filterInput}
+                  placeholder="Nombre del receptor..."
+                  value={tempFilters.destino}
+                  onChangeText={(text) => setTempFilters((prev) => ({ ...prev, destino: text }))}
+                />
+                <Text style={styles.filterHint}>
+                  Busca por el nombre del solicitante (si hay pedido) o por el receptor (si es
+                  entrega directa)
+                </Text>
+              </View>
+
               {/* Rango de fechas */}
-              <Text style={styles.filterLabel}>Rango de fechas</Text>
+              <Text style={styles.filterLabel}>Fecha de entrega</Text>
               <View style={styles.dateRangeContainer}>
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.dateButton}
                   onPress={() => setShowDatePicker('desde')}
                 >
                   <Calendar color="#6B7280" size={16} />
-                  <Text style={styles.dateButtonText}>
-                    {tempFilters.fechaDesde || 'Desde'}
+                  <Text
+                    style={[
+                      styles.dateButtonText,
+                      tempFilters.fechaDesde && styles.dateButtonTextSelected,
+                    ]}
+                  >
+                    {tempFilters.fechaDesde ? formatDisplayDate(tempFilters.fechaDesde) : 'Desde'}
                   </Text>
                 </TouchableOpacity>
                 <Text style={styles.dateSeparator}>—</Text>
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.dateButton}
                   onPress={() => setShowDatePicker('hasta')}
                 >
                   <Calendar color="#6B7280" size={16} />
-                  <Text style={styles.dateButtonText}>
-                    {tempFilters.fechaHasta || 'Hasta'}
+                  <Text
+                    style={[
+                      styles.dateButtonText,
+                      tempFilters.fechaHasta && styles.dateButtonTextSelected,
+                    ]}
+                  >
+                    {tempFilters.fechaHasta ? formatDisplayDate(tempFilters.fechaHasta) : 'Hasta'}
                   </Text>
                 </TouchableOpacity>
               </View>
+
+              {/* Botón para limpiar fechas */}
+              {(tempFilters.fechaDesde || tempFilters.fechaHasta) && (
+                <TouchableOpacity
+                  style={styles.clearDatesButton}
+                  onPress={() => {
+                    setTempFilters((prev) => ({ ...prev, fechaDesde: '', fechaHasta: '' }));
+                  }}
+                >
+                  <X color="#6B7280" size={14} />
+                  <Text style={styles.clearDatesText}>Limpiar fechas</Text>
+                </TouchableOpacity>
+              )}
 
               <View style={styles.modalButtons}>
                 <TouchableOpacity style={styles.clearAllButtonModal} onPress={clearFilters}>
@@ -577,21 +639,9 @@ export default function HistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F3F4F6',
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F3F4F6',
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 14,
-    color: '#6B7280',
-  },
+  container: { flex: 1, backgroundColor: '#F3F4F6' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
+  loadingText: { marginTop: 10, fontSize: 14, color: '#6B7280' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -601,17 +651,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#1F2937',
-    flex: 1,
-    marginLeft: 10,
-  },
-  filterButton: {
-    padding: 8,
-    position: 'relative',
-  },
+  title: { fontSize: 22, fontWeight: 'bold', color: '#1F2937', flex: 1, marginLeft: 10 },
+  filterButton: { padding: 8, position: 'relative' },
   filterBadge: {
     position: 'absolute',
     top: 0,
@@ -624,11 +665,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 4,
   },
-  filterBadgeText: {
-    color: 'white',
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
+  filterBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
   filtersContainer: {
     backgroundColor: 'white',
     paddingHorizontal: 16,
@@ -643,17 +680,9 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     marginRight: 8,
   },
-  filterChipActive: {
-    backgroundColor: '#7C3AED',
-  },
-  filterChipText: {
-    color: '#4B5563',
-    fontWeight: '500',
-    fontSize: 13,
-  },
-  filterChipTextActive: {
-    color: 'white',
-  },
+  filterChipActive: { backgroundColor: '#7C3AED' },
+  filterChipText: { color: '#4B5563', fontWeight: '500', fontSize: 13 },
+  filterChipTextActive: { color: 'white' },
   statsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -669,17 +698,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     elevation: 2,
   },
-  statNumber: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#7C3AED',
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 4,
-    textAlign: 'center',
-  },
+  statNumber: { fontSize: 24, fontWeight: 'bold', color: '#7C3AED' },
+  statLabel: { fontSize: 12, color: '#6B7280', marginTop: 4, textAlign: 'center' },
   clearFiltersButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -689,38 +709,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 4,
   },
-  clearFiltersText: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 40,
-    marginTop: 20,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#374151',
-    marginTop: 16,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: '#9CA3AF',
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  clearAllButton: {
-    marginTop: 16,
-    padding: 12,
-    backgroundColor: '#7C3AED',
-    borderRadius: 8,
-  },
-  clearAllButtonText: {
-    color: 'white',
-    fontWeight: '600',
-  },
+  clearFiltersText: { fontSize: 12, color: '#6B7280' },
+  emptyContainer: { alignItems: 'center', justifyContent: 'center', padding: 40, marginTop: 20 },
+  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
+  emptyText: { fontSize: 14, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
+  clearAllButton: { marginTop: 16, padding: 12, backgroundColor: '#7C3AED', borderRadius: 8 },
+  clearAllButtonText: { color: 'white', fontWeight: '600' },
   card: {
     backgroundColor: 'white',
     marginHorizontal: 16,
@@ -738,150 +732,43 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
-  cardHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  cardHeaderRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  cardDate: {
-    fontSize: 14,
-    color: '#4B5563',
-    fontWeight: '500',
-  },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-  },
-  badgeVinculado: {
-    backgroundColor: '#7C3AED',
-  },
-  badgeHuerfano: {
-    backgroundColor: '#6B7280',
-  },
-  badgeText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  cardBody: {
-    padding: 16,
-  },
-  tipoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    padding: 8,
-    backgroundColor: '#EDE9FE',
-    borderRadius: 8,
-    gap: 8,
-  },
-  tipoHuerfano: {
-    backgroundColor: '#E5E7EB',
-  },
-  tipoText: {
-    fontSize: 13,
-    color: '#5B21B6',
-    fontWeight: '600',
-  },
-  tipoHuerfanoText: {
-    fontSize: 13,
-    color: '#4B5563',
-    fontWeight: '600',
-  },
-  destinoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    gap: 8,
-  },
-  destinoLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  destinoText: {
-    fontSize: 14,
-    color: '#4B5563',
-    flex: 1,
-  },
+  cardHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  cardDate: { fontSize: 14, color: '#4B5563', fontWeight: '500' },
+  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+  badgeVinculado: { backgroundColor: '#7C3AED' },
+  badgeHuerfano: { backgroundColor: '#6B7280' },
+  badgeText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
+  cardBody: { padding: 16 },
+  destinoContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 },
+  destinoLabel: { fontSize: 14, fontWeight: '600', color: '#374151' },
+  destinoText: { fontSize: 14, color: '#4B5563', flex: 1 },
   pedidoInfoContainer: {
     backgroundColor: '#F3F4F6',
     padding: 12,
     borderRadius: 8,
     marginBottom: 12,
   },
-  pedidoInfoTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
-  },
-  pedidoInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
-  },
-  pedidoInfoLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginLeft: 2,
-  },
-  pedidoInfoValue: {
-    fontSize: 12,
-    color: '#1F2937',
-    fontWeight: '500',
-    flex: 1,
-  },
-  itemsResume: {
-    fontSize: 13,
-    color: '#6B7280',
-    fontStyle: 'italic',
-    marginTop: 4,
-  },
-  itemsContainer: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 12,
-  },
-  itemsTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
-  },
+  pedidoInfoTitle: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 },
+  pedidoInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  pedidoInfoLabel: { fontSize: 12, color: '#6B7280', marginLeft: 2 },
+  pedidoInfoValue: { fontSize: 12, color: '#1F2937', fontWeight: '500', flex: 1 },
+  itemsResume: { fontSize: 13, color: '#6B7280', fontStyle: 'italic', marginTop: 4 },
+  itemsContainer: { marginTop: 12, padding: 12, backgroundColor: '#F3F4F6', borderRadius: 12 },
+  itemsTitle: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
   itemRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
     gap: 8,
   },
-  itemInfo: {
-    flex: 1,
-  },
-  itemName: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#1F2937',
-  },
-  itemPresentation: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  itemQuantity: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#7C3AED',
-  },
+  itemInfo: { flex: 1 },
+  itemName: { fontSize: 14, fontWeight: '500', color: '#1F2937' },
+  itemPresentation: { fontSize: 12, color: '#6B7280' },
+  itemUbicacion: { fontSize: 11, color: '#10B981', marginTop: 2 },
+  itemQuantity: { fontSize: 14, fontWeight: 'bold', color: '#7C3AED' },
   totalsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -890,16 +777,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
   },
-  totalItems: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  totalUnidades: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#1F2937',
-  },
-  // Modal de filtros
+  totalItems: { fontSize: 12, color: '#6B7280' },
+  totalUnidades: { fontSize: 12, fontWeight: '600', color: '#1F2937' },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -921,23 +800,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1F2937',
-  },
-  filterForm: {
-    padding: 20,
-  },
-  filterInputGroup: {
-    marginBottom: 20,
-  },
-  filterLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
-  },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
+  filterForm: { padding: 20 },
+  filterInputGroup: { marginBottom: 20 },
+  filterLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
   filterInput: {
     backgroundColor: '#F9FAFB',
     borderWidth: 1,
@@ -946,37 +812,43 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 14,
   },
+  filterHint: { fontSize: 11, color: '#9CA3AF', marginTop: 4, fontStyle: 'italic' },
   dateRangeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-    marginBottom: 24,
+    marginBottom: 12,
   },
   dateButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#F9FAFB',
     borderWidth: 1,
     borderColor: '#D1D5DB',
     borderRadius: 10,
-    padding: 12,
-    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    gap: 6,
+    minWidth: 0, // Permite que el contenedor se reduzca
   },
   dateButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#1F2937',
+    flexShrink: 1,
+  },
+  dateButtonTextSelected: {
+    color: '#7C3AED',
+    fontWeight: '500',
   },
   dateSeparator: {
     fontSize: 14,
     color: '#6B7280',
+    paddingHorizontal: 4,
   },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
-  },
+  modalButtons: { flexDirection: 'row', gap: 12, marginTop: 8 },
   clearAllButtonModal: {
     flex: 1,
     backgroundColor: '#F3F4F6',
@@ -994,9 +866,22 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     gap: 8,
   },
-  applyButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
+  applyButtonText: { color: 'white', fontSize: 14, fontWeight: '600' },
+  clearDatesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    marginTop: 8,
+    marginBottom: 16,
+    gap: 4,
+  },
+  clearDatesText: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  dateButtonTextSelected: {
+    color: '#7C3AED',
+    fontWeight: '500',
   },
 });
