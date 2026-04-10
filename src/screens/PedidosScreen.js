@@ -1,5 +1,5 @@
+// src/screens/PedidosScreen.js
 import React, { useState, useEffect } from 'react';
-import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 import {
   View,
   Text,
@@ -22,13 +22,10 @@ import {
   addDoc,
   updateDoc,
   doc,
-  where,
-  getDocs,
   deleteDoc,
 } from 'firebase/firestore';
 import {
   Package,
-  User,
   Calendar,
   MapPin,
   Phone,
@@ -42,17 +39,21 @@ import {
   ClipboardList,
   Trash2,
   Pill,
-  AlertCircle,
   MinusCircle,
+  User,
+  CheckSquare,
+  Square,
 } from 'lucide-react-native';
+import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 
-export default function PedidosScreen() {
+export default function PedidosScreen({ user }) {
   const [pedidos, setPedidos] = useState([]);
   const [entregas, setEntregas] = useState([]);
   const [medicamentos, setMedicamentos] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [showAtenderModal, setShowAtenderModal] = useState(false);
   const [selectedPedido, setSelectedPedido] = useState(null);
+  const [selectedEntregasIds, setSelectedEntregasIds] = useState([]);
   const [filter, setFilter] = useState('pendientes');
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedId, setExpandedId] = useState(null);
@@ -62,7 +63,6 @@ export default function PedidosScreen() {
     nombreSolicitante: '',
     lugarResidencia: '',
     telefonoContacto: '',
-    detallePersona: '',
     notas: '',
     medicamentosSolicitados: [],
   });
@@ -75,6 +75,10 @@ export default function PedidosScreen() {
   const [zoomImage, setZoomImage] = useState(null);
   const [zoomMedName, setZoomMedName] = useState('');
 
+  const getUserName = () => {
+    return user?.nombre || user?.email?.split('@')[0] || 'usuario';
+  };
+
   useEffect(() => {
     const qPedidos = query(collection(db, 'pedidos'), orderBy('fechaPedido', 'desc'));
     const unsubscribePedidos = onSnapshot(qPedidos, (snapshot) => {
@@ -83,7 +87,7 @@ export default function PedidosScreen() {
       setPedidos(docs);
     });
 
-    const qEntregas = query(collection(db, 'entregas'), orderBy('fecha', 'desc'));
+    const qEntregas = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
     const unsubscribeEntregas = onSnapshot(qEntregas, (snapshot) => {
       const docs = [];
       snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
@@ -153,7 +157,7 @@ export default function PedidosScreen() {
       presentacion: medicamento.presentacion || 'No especificada',
       cantidad: cantidad,
       medicamentoId: medicamento.id,
-      ubicacion: medicamento.ubicacion || '', // Incluir ubicación
+      ubicacion: medicamento.ubicacion || '',
     };
 
     setSeleccionTemporal([...seleccionTemporal, nuevoItem]);
@@ -213,13 +217,13 @@ export default function PedidosScreen() {
         atendido: false,
         entregasRealizadas: [],
         fechaAtencion: null,
+        creadoPor: getUserName(),
       });
 
       setFormData({
         nombreSolicitante: '',
         lugarResidencia: '',
         telefonoContacto: '',
-        detallePersona: '',
         notas: '',
         medicamentosSolicitados: [],
       });
@@ -255,30 +259,62 @@ export default function PedidosScreen() {
     ]);
   };
 
-  const handleAtenderPedido = async (entregaSeleccionada) => {
+  const getEntregasDisponibles = () => {
+    return entregas.filter((e) => !e.pedidoId && e.estado === 'abierta' && e.items?.length > 0);
+  };
+
+  const toggleSeleccionEntrega = (entregaId) => {
+    setSelectedEntregasIds((prev) =>
+      prev.includes(entregaId) ? prev.filter((id) => id !== entregaId) : [...prev, entregaId]
+    );
+  };
+
+  const handleAsignarEntregas = async () => {
     if (!selectedPedido) return;
+    if (selectedEntregasIds.length === 0) {
+      Alert.alert('Error', 'Selecciona al menos una entrega');
+      return;
+    }
 
     try {
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
       const entregasActuales = selectedPedido.entregasRealizadas || [];
+      const nuevasEntregas = [];
+
+      for (const entregaId of selectedEntregasIds) {
+        const entrega = entregas.find((e) => e.id === entregaId);
+        if (!entrega) continue;
+
+        const entregaRef = doc(db, 'entregas', entregaId);
+        await updateDoc(entregaRef, {
+          pedidoId: selectedPedido.id,
+          vinculadaEn: new Date().toISOString(),
+          vinculadaPor: getUserName(),
+          estado: 'cerrada',
+        });
+
+        nuevasEntregas.push({
+          entregaId: entregaId,
+          fecha: new Date().toISOString(),
+          items: entrega.items || [],
+          destino: entrega.destino,
+          realizadoPor: getUserName(),
+        });
+      }
 
       await updateDoc(pedidoRef, {
-        entregasRealizadas: [
-          ...entregasActuales,
-          {
-            entregaId: entregaSeleccionada.id,
-            fecha: new Date().toISOString(),
-            items: entregaSeleccionada.items || [],
-          },
-        ],
+        entregasRealizadas: [...entregasActuales, ...nuevasEntregas],
         atendido: true,
         fechaAtencion: new Date().toISOString(),
+        atendidoPor: getUserName(),
       });
 
       setShowAtenderModal(false);
       setSelectedPedido(null);
-      Alert.alert('Éxito', 'Pedido marcado como atendido');
+      setSelectedEntregasIds([]);
+      Alert.alert('Éxito', `Pedido atendido con ${nuevasEntregas.length} entrega(s)`);
     } catch (error) {
+      console.error('Error:', error);
       Alert.alert('Error', 'No se pudo actualizar el pedido');
     }
   };
@@ -305,6 +341,15 @@ export default function PedidosScreen() {
     }
   };
 
+  // Cuenta la cantidad de items (medicamentos diferentes) entregados, no las unidades
+  const getTotalEntregadosCount = (pedido) => {
+    if (!pedido.entregasRealizadas) return 0;
+    // Suma la cantidad de items (medicamentos diferentes) en todas las entregas
+    return pedido.entregasRealizadas.reduce((total, entrega) => {
+      return total + (entrega.items?.length || 0);
+    }, 0);
+  };
+
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('es-ES', {
@@ -329,12 +374,20 @@ export default function PedidosScreen() {
     };
   };
 
-  // Función para abrir zoom
   const openZoomModal = (imageUri, medName) => {
     if (!imageUri) return;
-    setZoomImage(imageUri);
+    const fullUri = `data:image/jpeg;base64,${imageUri}`;
+    setZoomImage(fullUri);
     setZoomMedName(medName);
     setZoomModalVisible(true);
+  };
+
+  const abrirModalMedicamentos = () => {
+    setSeleccionTemporal([]);
+    setBusqueda('');
+    setCantidades({});
+    setMedicamentosFiltrados([]);
+    setShowMedicamentoModal(true);
   };
 
   if (loading) {
@@ -348,6 +401,8 @@ export default function PedidosScreen() {
 
   const filteredPedidos = getFilteredPedidos();
   const pendientesCount = pedidos.filter((p) => !p.atendido).length;
+  const atendidosCount = pedidos.filter((p) => p.atendido).length;
+  const entregasDisponibles = getEntregasDisponibles();
 
   return (
     <View style={styles.container}>
@@ -359,43 +414,51 @@ export default function PedidosScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{pedidos.length}</Text>
-          <Text style={styles.statLabel}>Total</Text>
-        </View>
-        <View style={[styles.statCard, styles.statPendiente]}>
-          <Text style={styles.statNumber}>{pendientesCount}</Text>
-          <Text style={styles.statLabel}>Pendientes</Text>
-        </View>
-        <View style={[styles.statCard, styles.statAtendido]}>
-          <Text style={styles.statNumber}>{pedidos.length - pendientesCount}</Text>
-          <Text style={styles.statLabel}>Atendidos</Text>
-        </View>
-      </View>
-
       <View style={styles.searchContainer}>
         <View style={styles.searchInputContainer}>
           <Search color="#9CA3AF" size={20} />
           <TextInput
             style={styles.searchInput}
             placeholder="Buscar..."
+            placeholderTextColor="#9CA3AF"
             value={searchTerm}
             onChangeText={setSearchTerm}
           />
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersScroll}>
-          {['pendientes', 'atendidos', 'todos'].map((f) => (
-            <TouchableOpacity
-              key={f}
-              style={[styles.filterChip, filter === f && styles.filterChipActive]}
-              onPress={() => setFilter(f)}
+          <TouchableOpacity
+            style={[styles.filterChip, filter === 'todos' && styles.filterChipActive]}
+            onPress={() => setFilter('todos')}
+          >
+            <Text
+              style={[styles.filterChipText, filter === 'todos' && styles.filterChipTextActive]}
             >
-              <Text style={[styles.filterChipText, filter === f && styles.filterChipTextActive]}>
-                {f === 'pendientes' ? 'Pendientes' : f === 'atendidos' ? 'Atendidos' : 'Todos'}
-              </Text>
-            </TouchableOpacity>
-          ))}
+              Todos ({pedidos.length})
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterChip, filter === 'pendientes' && styles.filterChipActive]}
+            onPress={() => setFilter('pendientes')}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                filter === 'pendientes' && styles.filterChipTextActive,
+              ]}
+            >
+              Pendientes ({pendientesCount})
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterChip, filter === 'atendidos' && styles.filterChipActive]}
+            onPress={() => setFilter('atendidos')}
+          >
+            <Text
+              style={[styles.filterChipText, filter === 'atendidos' && styles.filterChipTextActive]}
+            >
+              Atendidos ({atendidosCount})
+            </Text>
+          </TouchableOpacity>
         </ScrollView>
       </View>
 
@@ -421,8 +484,14 @@ export default function PedidosScreen() {
                   />
                   <View>
                     <Text style={styles.pedidoNombre}>{pedido.nombreSolicitante}</Text>
+                    {pedido.notas ? (
+                      <Text style={styles.pedidoNotas} numberOfLines={1}>
+                        📝 {pedido.notas}
+                      </Text>
+                    ) : null}
                     <Text style={styles.pedidoMedicamentos}>
-                      {pedido.medicamentosSolicitados?.length || 0} medicamentos
+                      {pedido.medicamentosSolicitados?.length || 0} solicitados |{' '}
+                      {getTotalEntregadosCount(pedido)} entregados
                     </Text>
                   </View>
                 </View>
@@ -441,52 +510,87 @@ export default function PedidosScreen() {
               {expandedId === pedido.id && (
                 <View style={styles.pedidoDetails}>
                   <View style={styles.detailRow}>
-                    <Calendar size={16} />
+                    <Calendar size={16} color="#6B7280" />
                     <Text style={styles.detailText}>{formatDate(pedido.fechaPedido)}</Text>
                   </View>
                   {pedido.lugarResidencia && (
                     <View style={styles.detailRow}>
-                      <MapPin size={16} />
-                      <Text>{pedido.lugarResidencia}</Text>
+                      <MapPin size={16} color="#6B7280" />
+                      <Text style={styles.detailText}>{pedido.lugarResidencia}</Text>
                     </View>
                   )}
                   {pedido.telefonoContacto && (
                     <View style={styles.detailRow}>
-                      <Phone size={16} />
-                      <Text>{pedido.telefonoContacto}</Text>
+                      <Phone size={16} color="#6B7280" />
+                      <Text style={styles.detailText}>{pedido.telefonoContacto}</Text>
                     </View>
                   )}
-                  <View style={styles.medicamentosContainer}>
-                    <Text style={styles.medicamentosTitle}>Medicamentos solicitados:</Text>
+
+                  {/* Medicamentos solicitados - estilo compacto como entregados */}
+                  <View style={styles.medicamentosEntregadosContainer}>
+                    <Text style={styles.medicamentosEntregadosTitle}>
+                      Medicamentos solicitados:
+                    </Text>
                     {pedido.medicamentosSolicitados?.map((med, idx) => {
                       const status = getMedicamentoEnPedidoStatus(med);
                       return (
-                        <View key={idx} style={styles.medicamentoItem}>
-                          <Pill size={14} />
-                          <View style={styles.medicamentoInfo}>
-                            <Text style={styles.medicamentoNombre}>{med.nombre}</Text>
-                            {!status.activo && (
-                              <Text style={styles.inactivoBadgeText}>Inactivo</Text>
-                            )}
-                            <Text style={styles.medicamentoCantidad}>x{med.cantidad}</Text>
-                            {status.ubicacion && (
-                              <Text style={styles.medicamentoUbicacion}>📍 {status.ubicacion}</Text>
-                            )}
-                          </View>
+                        <View key={idx} style={styles.medicamentoEntregadoItem}>
+                          <Pill size={12} color="#7C3AED" />
+                          <Text style={styles.medicamentoEntregadoNombre}>
+                            {med.nombre} x{med.cantidad}
+                            {status.ubicacion && ` 📍 ${status.ubicacion}`}
+                          </Text>
                         </View>
                       );
                     })}
                   </View>
+
+                  {/* Medicamentos entregados */}
+                  {pedido.entregasRealizadas && pedido.entregasRealizadas.length > 0 && (
+                    <View style={styles.medicamentosEntregadosContainer}>
+                      <Text style={styles.medicamentosEntregadosTitle}>
+                        Medicamentos entregados:
+                      </Text>
+                      {pedido.entregasRealizadas.map((entrega, idx) => (
+                        <View key={idx} style={styles.entregaRealizadaItem}>
+                          <Text style={styles.entregaFecha}>📅 {formatDate(entrega.fecha)}</Text>
+                          <Text style={styles.entregaDestino}>
+                            📍 Destino: {entrega.destino || pedido.nombreSolicitante}
+                          </Text>
+                          <Text style={styles.entregaUsuario}>
+                            👤 Entregado por: {entrega.realizadoPor || 'usuario'}
+                          </Text>
+                          {entrega.items?.map((item, itemIdx) => (
+                            <View key={itemIdx} style={styles.medicamentoEntregadoItem}>
+                              <Pill size={12} color="#10B981" />
+                              <Text style={styles.medicamentoEntregadoNombre}>
+                                {item.nombre} x{item.cantidad || 1}
+                                {item.ubicacion && ` 📍 ${item.ubicacion}`}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
                   {!pedido.atendido && (
                     <TouchableOpacity
                       style={styles.atenderButton}
                       onPress={() => {
+                        if (entregasDisponibles.length === 0) {
+                          Alert.alert('Sin entregas', 'NO HAY ENTREGAS ABIERTAS PARA VINCULAR');
+                          return;
+                        }
                         setSelectedPedido(pedido);
+                        setSelectedEntregasIds([]);
                         setShowAtenderModal(true);
                       }}
                     >
                       <CheckCircle color="white" size={20} />
-                      <Text>Marcar como Atendido</Text>
+                      <Text style={{ color: 'white', fontWeight: '600' }}>
+                        Marcar como Atendido
+                      </Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -503,25 +607,33 @@ export default function PedidosScreen() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Nuevo Pedido</Text>
               <TouchableOpacity onPress={() => setShowForm(false)}>
-                <XCircle size={24} />
+                <XCircle size={24} color="#6B7280" />
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody}>
-              <View style={styles.modalBody}>
+              <View style={styles.modalBodyContent}>
+                <Text style={styles.label}>Nombre del solicitante *</Text>
                 <TextInput
-                  placeholder="Nombre del solicitante *"
+                  placeholder="Ej: Juan Pérez"
+                  placeholderTextColor="#9CA3AF"
                   style={styles.input}
                   value={formData.nombreSolicitante}
                   onChangeText={(t) => setFormData({ ...formData, nombreSolicitante: t })}
                 />
+
+                <Text style={styles.label}>Lugar de residencia</Text>
                 <TextInput
-                  placeholder="Lugar de residencia"
+                  placeholder="Ej: Colonia Centro"
+                  placeholderTextColor="#9CA3AF"
                   style={styles.input}
                   value={formData.lugarResidencia}
                   onChangeText={(t) => setFormData({ ...formData, lugarResidencia: t })}
                 />
+
+                <Text style={styles.label}>Teléfono</Text>
                 <TextInput
-                  placeholder="Teléfono"
+                  placeholder="Ej: 1234-5678"
+                  placeholderTextColor="#9CA3AF"
                   style={styles.input}
                   keyboardType="phone-pad"
                   value={formData.telefonoContacto}
@@ -529,45 +641,34 @@ export default function PedidosScreen() {
                 />
 
                 <View style={styles.medicamentosSection}>
-                  <Text>Medicamentos *</Text>
+                  <Text style={styles.sectionLabel}>Medicamentos *</Text>
                   {formData.medicamentosSolicitados.map((med, idx) => (
                     <View key={med.id} style={styles.medicamentoAgregado}>
                       <View>
-                        <Text>
-                          {med.nombre} x{med.cantidad}
-                        </Text>
+                        <Text style={styles.medicamentoAgregadoNombre}>{med.nombre}</Text>
+                        <Text style={styles.medicamentoAgregadoCantidad}>x{med.cantidad}</Text>
                         {med.ubicacion && (
                           <Text style={styles.ubicacionTexto}>📍 {med.ubicacion}</Text>
                         )}
                       </View>
                       <TouchableOpacity onPress={() => eliminarMedicamentoDelPedido(idx)}>
-                        <Trash2 size={18} />
+                        <Trash2 size={18} color="#DC2626" />
                       </TouchableOpacity>
                     </View>
                   ))}
                   <TouchableOpacity
                     style={styles.agregarMedicamentoButton}
-                    onPress={() => {
-                      setSeleccionTemporal([]);
-                      setBusqueda('');
-                      setCantidades({});
-                      setShowMedicamentoModal(true);
-                    }}
+                    onPress={abrirModalMedicamentos}
                   >
-                    <Plus size={20} />
-                    <Text>Agregar medicamentos</Text>
+                    <Plus size={20} color="#7C3AED" />
+                    <Text style={{ color: '#7C3AED' }}>Agregar medicamentos</Text>
                   </TouchableOpacity>
                 </View>
 
+                <Text style={styles.label}>Notas</Text>
                 <TextInput
-                  placeholder="Detalles"
-                  style={[styles.input, styles.textArea]}
-                  multiline
-                  value={formData.detallePersona}
-                  onChangeText={(t) => setFormData({ ...formData, detallePersona: t })}
-                />
-                <TextInput
-                  placeholder="Notas"
+                  placeholder="Notas internas"
+                  placeholderTextColor="#9CA3AF"
                   style={[styles.input, styles.textArea]}
                   multiline
                   value={formData.notas}
@@ -605,16 +706,18 @@ export default function PedidosScreen() {
                 setSeleccionTemporal([]);
                 setShowMedicamentoModal(false);
                 setCantidades({});
+                setMedicamentosFiltrados([]);
               }}
             >
-              <XCircle size={28} />
+              <XCircle size={28} color="white" />
             </TouchableOpacity>
           </View>
           <View style={styles.searchInputContainerFull}>
-            <Search size={20} />
+            <Search size={20} color="#9CA3AF" />
             <TextInput
               style={styles.searchInputFull}
               placeholder="Buscar..."
+              placeholderTextColor="#9CA3AF"
               value={busqueda}
               onChangeText={(text) => {
                 setBusqueda(text);
@@ -626,21 +729,14 @@ export default function PedidosScreen() {
             data={medicamentosFiltrados}
             keyExtractor={(item) => item.id}
             style={styles.flatList}
-            initialNumToRender={10}
-            maxToRenderPerBatch={10}
-            windowSize={5}
-            removeClippedSubviews={true}
-            getItemLayout={(data, index) => ({
-              length: 100, // Aumentado para mejor espacio
-              offset: 100 * index,
-              index,
-            })}
             renderItem={({ item }) => (
               <View style={styles.medicamentoItemSeleccion}>
-                {/* Imagen miniatura a la izquierda */}
                 {item.imagen ? (
                   <TouchableOpacity onPress={() => openZoomModal(item.imagen, item.nombre)}>
-                    <Image source={{ uri: item.imagen }} style={styles.medImageThumb} />
+                    <Image
+                      source={{ uri: `data:image/jpeg;base64,${item.imagen}` }}
+                      style={styles.medImageThumb}
+                    />
                   </TouchableOpacity>
                 ) : (
                   <View style={styles.medImagePlaceholder}>
@@ -648,7 +744,6 @@ export default function PedidosScreen() {
                   </View>
                 )}
 
-                {/* Información del medicamento */}
                 <View style={styles.medicamentoInfoSeleccion}>
                   <Text style={styles.medicamentoNombreSeleccion} numberOfLines={2}>
                     {item.nombre}
@@ -664,11 +759,11 @@ export default function PedidosScreen() {
                   )}
                 </View>
 
-                {/* Cantidad y botón */}
                 <View style={styles.seleccionCantidadContainer}>
                   <TextInput
                     style={styles.cantidadInputSeleccion}
                     placeholder="Cant"
+                    placeholderTextColor="#9CA3AF"
                     keyboardType="numeric"
                     value={cantidades[item.id] || ''}
                     onChangeText={(text) => actualizarCantidad(item.id, text)}
@@ -694,19 +789,16 @@ export default function PedidosScreen() {
             }
           />
           {seleccionTemporal.length > 0 && (
-            <View style={{ padding: 16, borderTopWidth: 1 }}>
-              <Text>Seleccionados:</Text>
+            <View style={styles.seleccionPreviewContainer}>
+              <Text style={styles.seleccionPreviewTitle}>Seleccionados:</Text>
               {seleccionTemporal.map((item) => (
-                <View
-                  key={item.id}
-                  style={{ flexDirection: 'row', justifyContent: 'space-between', padding: 8 }}
-                >
-                  <View>
-                    <Text>
+                <View key={item.id} style={styles.seleccionPreviewItem}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.seleccionPreviewName}>
                       {item.nombre} x{item.cantidad}
                     </Text>
                     {item.ubicacion && (
-                      <Text style={{ fontSize: 11, color: '#6B7280' }}>📍 {item.ubicacion}</Text>
+                      <Text style={styles.seleccionPreviewUbicacion}>📍 {item.ubicacion}</Text>
                     )}
                   </View>
                   <TouchableOpacity onPress={() => eliminarDeSeleccion(item.id)}>
@@ -715,16 +807,10 @@ export default function PedidosScreen() {
                 </View>
               ))}
               <TouchableOpacity
-                style={{
-                  backgroundColor: '#10B981',
-                  padding: 16,
-                  borderRadius: 12,
-                  marginTop: 8,
-                  alignItems: 'center',
-                }}
+                style={styles.confirmarSeleccionButton}
                 onPress={confirmarSeleccion}
               >
-                <Text style={{ color: 'white', fontWeight: 'bold' }}>
+                <Text style={styles.confirmarSeleccionButtonText}>
                   Confirmar ({seleccionTemporal.length})
                 </Text>
               </TouchableOpacity>
@@ -734,32 +820,106 @@ export default function PedidosScreen() {
       </Modal>
 
       {/* Modal para atender pedido */}
-      <Modal visible={showAtenderModal} transparent>
+      <Modal visible={showAtenderModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalContentLarge}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Atender Pedido</Text>
-              <TouchableOpacity onPress={() => setShowAtenderModal(false)}>
-                <XCircle size={24} />
+              <Text style={styles.modalTitle}>Atender Pedido con Entregas</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowAtenderModal(false);
+                  setSelectedEntregasIds([]);
+                }}
+              >
+                <XCircle size={24} color="#6B7280" />
               </TouchableOpacity>
             </View>
-            <ScrollView>
-              {entregas
-                .filter((e) => e.items?.length > 0)
-                .map((entrega) => (
+            <ScrollView style={styles.modalBodyScroll}>
+              {entregasDisponibles.length === 0 ? (
+                <View style={styles.emptyEntregasContainer}>
+                  <Package color="#D1D5DB" size={48} />
+                  <Text style={styles.emptyEntregasText}>
+                    NO HAY ENTREGAS ABIERTAS PARA VINCULAR
+                  </Text>
+                  <Text style={styles.emptyEntregasSubtext}>
+                    Las entregas realizadas sin pedido aparecerán aquí
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  {entregasDisponibles.map((entrega) => {
+                    const isSelected = selectedEntregasIds.includes(entrega.id);
+                    return (
+                      <TouchableOpacity
+                        key={entrega.id}
+                        style={[
+                          styles.entregaOptionCard,
+                          isSelected && styles.entregaOptionSelected,
+                        ]}
+                        onPress={() => toggleSeleccionEntrega(entrega.id)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.entregaOptionHeader}>
+                          {isSelected ? (
+                            <CheckSquare size={22} color="#7C3AED" />
+                          ) : (
+                            <Square size={22} color="#9CA3AF" />
+                          )}
+                          <Text style={styles.entregaOptionFecha}>
+                            📅 {formatDate(entrega.fechaCreacion)}
+                          </Text>
+                        </View>
+                        <View style={styles.entregaOptionDestinoContainer}>
+                          <Text style={styles.entregaOptionDestinoLabel}>Destino:</Text>
+                          <Text style={styles.entregaOptionDestinoValue}>{entrega.destino}</Text>
+                        </View>
+                        <Text style={styles.entregaOptionCreadoPor}>
+                          👤 Creado por: {entrega.creadoPor || 'usuario'}
+                        </Text>
+                        <View style={styles.entregaOptionItemsHeader}>
+                          <Text style={styles.entregaOptionItemsTitle}>Medicamentos:</Text>
+                        </View>
+                        {entrega.items?.map((item, idx) => (
+                          <View key={idx} style={styles.entregaOptionItem}>
+                            <Pill size={14} color="#7C3AED" />
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.entregaOptionItemName}>{item.nombre}</Text>
+                              {item.presentacion && (
+                                <Text style={styles.entregaOptionItemPresentacion}>
+                                  {item.presentacion}
+                                </Text>
+                              )}
+                            </View>
+                            <Text style={styles.entregaOptionItemCantidad}>
+                              x{item.cantidad || 1}
+                            </Text>
+                          </View>
+                        ))}
+                      </TouchableOpacity>
+                    );
+                  })}
+
                   <TouchableOpacity
-                    key={entrega.id}
-                    style={styles.entregaOption}
-                    onPress={() => handleAtenderPedido(entrega)}
+                    style={[
+                      styles.asignarButton,
+                      selectedEntregasIds.length === 0 && styles.asignarButtonDisabled,
+                    ]}
+                    onPress={handleAsignarEntregas}
+                    disabled={selectedEntregasIds.length === 0}
                   >
-                    <Text>{formatDate(entrega.fecha)}</Text>
-                    <Text>{entrega.destino}</Text>
+                    <CheckCircle color="white" size={20} />
+                    <Text style={styles.asignarButtonText}>
+                      ASIGNAR ({selectedEntregasIds.length} entrega
+                      {selectedEntregasIds.length !== 1 ? 's' : ''})
+                    </Text>
                   </TouchableOpacity>
-                ))}
+                </>
+              )}
             </ScrollView>
           </View>
         </View>
       </Modal>
+
       {/* Modal de zoom para imágenes */}
       <Modal
         visible={zoomModalVisible}
@@ -801,19 +961,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  statsContainer: { flexDirection: 'row', padding: 16, gap: 12 },
-  statCard: {
-    flex: 1,
-    backgroundColor: 'white',
-    padding: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    elevation: 2,
-  },
-  statPendiente: { backgroundColor: '#FEF3C7' },
-  statAtendido: { backgroundColor: '#D1FAE5' },
-  statNumber: { fontSize: 24, fontWeight: 'bold', color: '#1F2937' },
-  statLabel: { fontSize: 12, color: '#6B7280' },
   searchContainer: { backgroundColor: 'white', padding: 16 },
   searchInputContainer: {
     flexDirection: 'row',
@@ -823,7 +970,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginBottom: 12,
   },
-  searchInput: { flex: 1, paddingVertical: 12, fontSize: 16 },
+  searchInput: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#1F2937' },
   filtersScroll: { flexDirection: 'row' },
   filterChip: {
     paddingHorizontal: 16,
@@ -857,23 +1004,39 @@ const styles = StyleSheet.create({
   pendienteDot: { backgroundColor: '#F59E0B' },
   atendidoDot: { backgroundColor: '#10B981' },
   pedidoNombre: { fontSize: 16, fontWeight: 'bold', color: '#1F2937' },
+  pedidoNotas: { fontSize: 11, color: '#6B7280', fontStyle: 'italic', marginTop: 2 },
   pedidoMedicamentos: { fontSize: 12, color: '#6B7280', marginTop: 2 },
   pedidoDetails: { padding: 16, paddingTop: 0, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
   detailRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 },
   detailText: { fontSize: 14, color: '#4B5563', flex: 1 },
-  medicamentosContainer: {
+  medicamentosEntregadosContainer: {
     marginVertical: 8,
     padding: 8,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#D1FAE5',
     borderRadius: 8,
   },
-  medicamentosTitle: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 6 },
-  medicamentoItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingVertical: 4 },
-  medicamentoInfo: { flex: 1 },
-  medicamentoNombre: { fontSize: 13, color: '#1F2937', fontWeight: '500' },
-  medicamentoCantidad: { fontSize: 13, fontWeight: 'bold', color: '#7C3AED', marginTop: 2 },
-  medicamentoUbicacion: { fontSize: 11, color: '#10B981', marginTop: 2 },
-  inactivoBadgeText: { fontSize: 10, color: '#DC2626', marginLeft: 6 },
+  medicamentosEntregadosTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#065F46',
+    marginBottom: 6,
+  },
+  entregaRealizadaItem: {
+    marginBottom: 8,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#A7F3D0',
+  },
+  entregaFecha: { fontSize: 11, color: '#065F46', marginBottom: 2 },
+  entregaDestino: { fontSize: 11, color: '#065F46', marginBottom: 2 },
+  entregaUsuario: { fontSize: 11, color: '#7C3AED', marginBottom: 4, fontStyle: 'italic' },
+  medicamentoEntregadoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 2,
+  },
+  medicamentoEntregadoNombre: { fontSize: 12, color: '#065F46' },
   atenderButton: {
     backgroundColor: '#10B981',
     flexDirection: 'row',
@@ -891,15 +1054,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalContent: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '80%' },
+  modalContentLarge: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '80%' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 20,
     borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
   },
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
   modalBody: { padding: 20 },
+  modalBodyContent: { padding: 20 },
+  modalBodyScroll: { maxHeight: '80%' },
+  label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 5 },
+  sectionLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 10 },
   input: {
     borderWidth: 1,
     borderColor: '#D1D5DB',
@@ -907,6 +1076,7 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
     marginBottom: 16,
+    color: '#1F2937',
   },
   textArea: { minHeight: 80, textAlignVertical: 'top' },
   medicamentosSection: {
@@ -924,6 +1094,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 8,
   },
+  medicamentoAgregadoNombre: { fontSize: 14, fontWeight: '500', color: '#1F2937' },
+  medicamentoAgregadoCantidad: { fontSize: 12, color: '#7C3AED' },
   ubicacionTexto: { fontSize: 11, color: '#10B981', marginTop: 2 },
   agregarMedicamentoButton: {
     flexDirection: 'row',
@@ -944,14 +1116,101 @@ const styles = StyleSheet.create({
   },
   saveButtonDisabled: { opacity: 0.5 },
   saveButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
-  entregaOption: {
+  entregaOptionCard: {
     backgroundColor: '#F9FAFB',
+    marginHorizontal: 16,
+    marginVertical: 8,
     padding: 16,
-    borderRadius: 8,
-    marginBottom: 12,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
+  entregaOptionSelected: {
+    backgroundColor: '#EDE9FE',
+    borderColor: '#7C3AED',
+    borderWidth: 2,
+  },
+  entregaOptionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  entregaOptionFecha: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#7C3AED',
+    flex: 1,
+  },
+  entregaOptionDestinoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  entregaOptionDestinoLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  entregaOptionDestinoValue: {
+    fontSize: 12,
+    color: '#10B981',
+    fontWeight: '500',
+  },
+  entregaOptionCreadoPor: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginBottom: 12,
+    fontStyle: 'italic',
+  },
+  entregaOptionItemsHeader: {
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  entregaOptionItemsTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  entregaOptionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  entregaOptionItemName: { fontSize: 14, fontWeight: '500', color: '#1F2937', flex: 1 },
+  entregaOptionItemPresentacion: { fontSize: 11, color: '#6B7280' },
+  entregaOptionItemCantidad: { fontSize: 14, fontWeight: 'bold', color: '#7C3AED' },
+  asignarButton: {
+    backgroundColor: '#7C3AED',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 12,
+    margin: 16,
+    gap: 8,
+  },
+  asignarButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  asignarButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  emptyEntregasContainer: { alignItems: 'center', padding: 40 },
+  emptyEntregasText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#DC2626',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  emptyEntregasSubtext: { fontSize: 12, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
   fullModalContainer: { flex: 1, backgroundColor: 'white' },
   fullModalHeader: {
     flexDirection: 'row',
@@ -970,48 +1229,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     margin: 16,
   },
-  searchInputFull: { flex: 1, paddingVertical: 12, fontSize: 16, marginLeft: 8 },
-
-  inputGroup: {
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 4,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 12,
-  },
-  medicamentoAgregadoInfo: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  medicamentoAgregadoNombre: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#1F2937',
-  },
-  medicamentoAgregadoCantidad: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#7C3AED',
-  },
-  medicamentoAgregadoPresentacion: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  agregarMedicamentoText: {
-    color: '#7C3AED',
-    fontWeight: '600',
-  },
+  searchInputFull: { flex: 1, paddingVertical: 12, fontSize: 16, marginLeft: 8, color: '#1F2937' },
+  flatList: { flex: 1 },
   medicamentoItemSeleccion: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1025,36 +1244,17 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     gap: 8,
   },
-  medicamentoInfoSeleccion: {
-    flex: 1,
-    flexShrink: 1, // Permite que el texto se reduzca
-  },
+  medicamentoInfoSeleccion: { flex: 1, flexShrink: 1 },
   medicamentoNombreSeleccion: {
     fontSize: 14,
     fontWeight: 'bold',
     color: '#1F2937',
     marginBottom: 2,
   },
-  medicamentoPresentacionSeleccion: {
-    fontSize: 11,
-    color: '#6B7280',
-    marginBottom: 2,
-  },
-  medicamentoStockSeleccion: {
-    fontSize: 11,
-    color: '#10B981',
-    marginBottom: 2,
-  },
-  medicamentoUbicacionSeleccion: {
-    fontSize: 10,
-    color: '#6B7280',
-  },
-  seleccionCantidadContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexShrink: 0, // No permite que este contenedor se reduzca
-  },
+  medicamentoPresentacionSeleccion: { fontSize: 11, color: '#6B7280', marginBottom: 2 },
+  medicamentoStockSeleccion: { fontSize: 11, color: '#10B981', marginBottom: 2 },
+  medicamentoUbicacionSeleccion: { fontSize: 10, color: '#6B7280' },
+  seleccionCantidadContainer: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
   cantidadInputSeleccion: {
     width: 60,
     borderWidth: 1,
@@ -1064,6 +1264,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     fontSize: 14,
     textAlign: 'center',
+    color: '#1F2937',
   },
   agregarSeleccionButton: {
     backgroundColor: '#7C3AED',
@@ -1072,12 +1273,7 @@ const styles = StyleSheet.create({
     minWidth: 36,
     alignItems: 'center',
   },
-  medImageThumb: {
-    width: 50,
-    height: 50,
-    borderRadius: 8,
-    marginRight: 12,
-  },
+  medImageThumb: { width: 50, height: 50, borderRadius: 8, marginRight: 12 },
   medImagePlaceholder: {
     width: 50,
     height: 50,
@@ -1087,6 +1283,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  emptyListContainer: { alignItems: 'center', padding: 40 },
+  emptyListText: { fontSize: 14, color: '#9CA3AF', marginTop: 8 },
+  seleccionPreviewContainer: { padding: 16, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
+  seleccionPreviewTitle: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
+  seleccionPreviewItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  seleccionPreviewName: { fontSize: 13, color: '#1F2937' },
+  seleccionPreviewUbicacion: { fontSize: 10, color: '#10B981' },
+  confirmarSeleccionButton: {
+    backgroundColor: '#10B981',
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  confirmarSeleccionButtonText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   zoomModalContainer: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.95)',
@@ -1104,14 +1320,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     zIndex: 10,
   },
-  zoomModalTitle: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
-    flex: 1,
-  },
-  zoomModalImage: {
-    width: '100%',
-    height: '80%',
-  },
+  zoomModalTitle: { color: 'white', fontSize: 16, fontWeight: 'bold', flex: 1 },
+  zoomModalImage: { width: '100%', height: '80%' },
 });

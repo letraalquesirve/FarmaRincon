@@ -17,13 +17,14 @@ export default function LoginModal({ visible, onLogin, onClose }) {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if (!username.trim()) {
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) {
       Alert.alert('Error', 'Ingresa tu nombre de usuario');
       return;
     }
 
     setLoading(true);
-    const result = await verifyUser(username);
+    const result = await verifyUser(trimmedUsername);
     setLoading(false);
 
     if (result.success) {
@@ -50,6 +51,7 @@ export default function LoginModal({ visible, onLogin, onClose }) {
           <TextInput
             style={styles.input}
             placeholder="Nombre de usuario"
+            placeholderTextColor="#9CA3AF"
             value={username}
             onChangeText={setUsername}
             autoCapitalize="none"
@@ -124,6 +126,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 20,
     backgroundColor: '#F9FAFB',
+    color: '#1F2937',
   },
   loginButton: {
     backgroundColor: '#7C3AED',

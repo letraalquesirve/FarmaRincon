@@ -1,3 +1,4 @@
+// src/screens/InventoryScreen.js
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -12,6 +13,8 @@ import {
   Share,
   Animated,
 } from 'react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { db } from '../../firebaseConfig';
 import { collection, onSnapshot, query, orderBy, doc, updateDoc, where } from 'firebase/firestore';
 import {
@@ -24,13 +27,11 @@ import {
   ZoomIn,
   Share2,
   MinusCircle,
+  FileText,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
-import * as FileSystem from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
 import { isAdmin } from '../services/AuthService';
-import DespachoModal from '../components/DespachoModal';
 
 const normalizeText = (text) => {
   if (!text) return '';
@@ -50,10 +51,7 @@ export default function InventoryScreen({ user }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedMedName, setSelectedMedName] = useState('');
-
-  // Estado para el modal de despacho
-  const [despachoModalVisible, setDespachoModalVisible] = useState(false);
-  const [selectedMedForDespacho, setSelectedMedForDespacho] = useState(null);
+  const [generatingPDF, setGeneratingPDF] = useState(false);
 
   const scale = useRef(new Animated.Value(1)).current;
   const savedScale = useRef(1);
@@ -123,6 +121,187 @@ export default function InventoryScreen({ user }) {
     return filtered;
   };
 
+  const getFilterTitle = () => {
+    if (showInactivos) {
+      return 'LISTADO DE MEDICAMENTOS INACTIVOS';
+    }
+    switch (filter) {
+      case 'vigentes':
+        return 'LISTADO DE MEDICAMENTOS VIGENTES';
+      case 'porVencer':
+        return 'LISTADO DE MEDICAMENTOS POR VENCER';
+      case 'vencidos':
+        return 'LISTADO DE MEDICAMENTOS VENCIDOS';
+      default:
+        return 'LISTADO DE MEDICAMENTOS ACTIVOS';
+    }
+  };
+
+  // En InventoryScreen.js, reemplaza la función generatePDF por esta:
+
+  const generatePDF = async () => {
+    // Obtener los mismos medicamentos que se muestran en pantalla
+    let filteredMeds = [...medicamentos];
+
+    // Aplicar búsqueda
+    if (searchTerm) {
+      const searchNorm = normalizeText(searchTerm);
+      filteredMeds = filteredMeds.filter(
+        (m) =>
+          normalizeText(m.nombre).includes(searchNorm) ||
+          normalizeText(m.presentacion || '').includes(searchNorm) ||
+          normalizeText(m.categoria || '').includes(searchNorm) ||
+          normalizeText(m.ubicacion || '').includes(searchNorm)
+      );
+    }
+
+    // Aplicar filtro de estado (solo si NO estamos viendo inactivos)
+    if (!showInactivos) {
+      switch (filter) {
+        case 'vigentes':
+          filteredMeds = filteredMeds.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
+          break;
+        case 'porVencer':
+          filteredMeds = filteredMeds.filter((m) => {
+            const days = getDaysUntilExpiry(m.vencimiento);
+            return days >= 0 && days <= 30;
+          });
+          break;
+        case 'vencidos':
+          filteredMeds = filteredMeds.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
+          break;
+      }
+    }
+
+    if (filteredMeds.length === 0) {
+      Alert.alert('Sin datos', 'No hay medicamentos para generar el PDF');
+      return;
+    }
+
+    setGeneratingPDF(true);
+
+    try {
+      const today = new Date().toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      // Determinar título según lo que se está mostrando
+      let title = '';
+      if (showInactivos) {
+        title = 'LISTADO DE MEDICAMENTOS INACTIVOS';
+      } else {
+        switch (filter) {
+          case 'vigentes':
+            title = 'LISTADO DE MEDICAMENTOS VIGENTES';
+            break;
+          case 'porVencer':
+            title = 'LISTADO DE MEDICAMENTOS POR VENCER';
+            break;
+          case 'vencidos':
+            title = 'LISTADO DE MEDICAMENTOS VENCIDOS';
+            break;
+          default:
+            title = 'LISTADO DE MEDICAMENTOS ACTIVOS';
+        }
+      }
+
+      let tableRows = '';
+      filteredMeds.forEach((med, index) => {
+        const status = getStatusText(med.vencimiento);
+        const statusColor = getStatusColorForPDF(med.vencimiento);
+
+        tableRows += `
+        <tr style="background-color: ${index % 2 === 0 ? '#f9fafb' : 'white'}">
+          <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${index + 1}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(med.nombre || '')}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(med.presentacion || '')}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(med.categoria || '')}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${med.cantidad || 0}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${new Date(med.vencimiento).toLocaleDateString()}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(med.ubicacion || '')}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; color: ${statusColor}; font-weight: bold;">${status}</td>
+        </tr>
+      `;
+      });
+
+      const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>${title}</title>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Helvetica', 'Arial', sans-serif; padding: 20px; background-color: white; }
+            .header { text-align: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #7C3AED; }
+            .title { font-size: 20px; font-weight: bold; color: #1F2937; margin-bottom: 5px; }
+            .subtitle { font-size: 12px; color: #6B7280; }
+            .stats { margin-bottom: 15px; padding: 10px; background-color: #F3F4F6; border-radius: 8px; text-align: center; }
+            .stats-text { font-size: 12px; color: #374151; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th { background-color: #7C3AED; color: white; padding: 10px; text-align: left; font-weight: bold; }
+            td { padding: 8px; border-bottom: 1px solid #E5E7EB; }
+            .footer { margin-top: 20px; padding-top: 10px; text-align: center; font-size: 10px; color: #9CA3AF; border-top: 1px solid #E5E7EB; }
+            @media print {
+              body { padding: 10px; }
+              th { background-color: #7C3AED; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="title">${title}</div>
+            <div class="subtitle">Generado: ${today}</div>
+          </div>
+          <div class="stats">
+            <div class="stats-text">Total de medicamentos: ${filteredMeds.length}</div>
+          </div>
+          <table>
+            <thead>
+              <tr><th>#</th><th>Nombre</th><th>Presentación</th><th>Categoría</th><th>Stock</th><th>Vencimiento</th><th>Ubicación</th><th>Estado</th></tr>
+            </thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+          <div class="footer">
+            <div>Farmacia Iglesia - Sistema de Gestión de Inventario</div>
+            <div>Reporte generado automáticamente</div>
+          </div>
+        </body>
+      </html>
+    `;
+
+      const { uri } = await Print.printToFileAsync({ html });
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Compartir reporte de medicamentos',
+        });
+      } else {
+        Alert.alert('Error', 'No es posible compartir archivos en este dispositivo');
+      }
+    } catch (error) {
+      console.error('Error generando PDF:', error);
+      Alert.alert('Error', 'No se pudo generar el PDF');
+    } finally {
+      setGeneratingPDF(false);
+    }
+  };
+
+  const escapeHtml = (text) => {
+    if (!text) return '';
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  };
+
   const handleSoftDelete = (medId, medName) => {
     Alert.alert(
       'Desactivar Medicamento',
@@ -168,7 +347,8 @@ export default function InventoryScreen({ user }) {
   const openImageModal = (imageUri, medName) => {
     if (!imageUri) return;
     resetZoom();
-    setSelectedImage(imageUri);
+    const fullUri = `data:image/jpeg;base64,${imageUri}`;
+    setSelectedImage(fullUri);
     setSelectedMedName(medName);
     setModalVisible(true);
   };
@@ -181,32 +361,13 @@ export default function InventoryScreen({ user }) {
   const shareImage = async () => {
     if (!selectedImage) return;
     try {
-      if (selectedImage.startsWith('file://')) {
-        await Sharing.shareAsync(selectedImage);
-        return;
-      }
-      const filename = selectedImage.split('/').pop().split('?')[0] || 'imagen.jpg';
-      const localUri = FileSystem.cacheDirectory + filename;
-      const { uri } = await FileSystem.downloadAsync(selectedImage, localUri);
-      await Sharing.shareAsync(uri);
+      await Share.share({
+        url: selectedImage,
+        message: `Imagen de ${selectedMedName}`,
+      });
     } catch (e) {
       Alert.alert('Error', 'No se pudo compartir la imagen');
-      console.error(e);
     }
-  };
-
-  const openDespachoModal = (med) => {
-    if (!isAdmin(user)) {
-      Alert.alert('Permiso Denegado', 'UD NO TIENE PERMISOS PARA ESTO');
-      return;
-    }
-    setSelectedMedForDespacho(med);
-    setDespachoModalVisible(true);
-  };
-
-  const handleDespachoSuccess = () => {
-    setDespachoModalVisible(false);
-    setSelectedMedForDespacho(null);
   };
 
   const getStatusColor = (fecha) => {
@@ -223,18 +384,25 @@ export default function InventoryScreen({ user }) {
     return 'Vigente';
   };
 
+  const getStatusColorForPDF = (fecha) => {
+    const days = getDaysUntilExpiry(fecha);
+    if (days < 0) return '#DC2626';
+    if (days <= 30) return '#EA580C';
+    return '#10B981';
+  };
+
   const filteredMeds = getFilteredMeds();
   const userIsAdmin = isAdmin(user);
 
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.searchContainer}>
           <Search color="#9CA3AF" size={20} style={styles.searchIcon} />
           <TextInput
             style={styles.searchInput}
             placeholder="Buscar medicamento..."
+            placeholderTextColor="#9CA3AF"
             value={searchTerm}
             onChangeText={setSearchTerm}
           />
@@ -270,7 +438,6 @@ export default function InventoryScreen({ user }) {
         </View>
       </View>
 
-      {/* Filtros */}
       {showFilters && (
         <View style={styles.filtersContainer}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -296,7 +463,6 @@ export default function InventoryScreen({ user }) {
         </View>
       )}
 
-      {/* Lista */}
       <ScrollView style={styles.content}>
         {filteredMeds.length === 0 ? (
           <View style={styles.emptyContainer}>
@@ -312,10 +478,18 @@ export default function InventoryScreen({ user }) {
           </View>
         ) : (
           <>
-            <Text style={styles.resultsText}>
-              {filteredMeds.length} {filteredMeds.length === 1 ? 'medicamento' : 'medicamentos'}{' '}
-              encontrados
-            </Text>
+            {/* El botón PDF siempre visible, no condicional */}
+            <View style={styles.resultsHeader}>
+              <Text style={styles.resultsText}>{filteredMeds.length} encontrados</Text>
+              <TouchableOpacity
+                style={styles.pdfButton}
+                onPress={generatePDF}
+                disabled={generatingPDF}
+              >
+                <FileText color="#7C3AED" size={18} />
+                <Text style={styles.pdfButtonText}>PDF</Text>
+              </TouchableOpacity>
+            </View>
 
             {filteredMeds.map((med) => {
               const isInactivo = med.activo === false;
@@ -340,10 +514,16 @@ export default function InventoryScreen({ user }) {
                         {med.ubicacion && (
                           <Text style={styles.medUbicacion}>📍 {med.ubicacion}</Text>
                         )}
+                        {med.userName && (
+                          <Text style={styles.medUser}>👤 Registrado por: {med.userName}</Text>
+                        )}
                       </View>
                       {med.imagen && (
                         <TouchableOpacity onPress={() => openImageModal(med.imagen, med.nombre)}>
-                          <Image source={{ uri: med.imagen }} style={styles.medImage} />
+                          <Image
+                            source={{ uri: `data:image/jpeg;base64,${med.imagen}` }}
+                            style={styles.medImage}
+                          />
                           <View style={styles.zoomHint}>
                             <ZoomIn color="white" size={12} />
                           </View>
@@ -376,16 +556,6 @@ export default function InventoryScreen({ user }) {
 
                     {/* Botones de acción */}
                     <View style={styles.actionButtons}>
-                      {userIsAdmin && !isInactivo && (
-                        <TouchableOpacity
-                          style={styles.despacharButton}
-                          onPress={() => openDespachoModal(med)}
-                        >
-                          <MinusCircle color="white" size={18} />
-                          <Text style={styles.despacharButtonText}>Despachar</Text>
-                        </TouchableOpacity>
-                      )}
-
                       {isInactivo ? (
                         <TouchableOpacity
                           style={styles.reactivarButton}
@@ -449,14 +619,6 @@ export default function InventoryScreen({ user }) {
           </View>
         </GestureHandlerRootView>
       </Modal>
-
-      {/* Modal de despacho */}
-      <DespachoModal
-        visible={despachoModalVisible}
-        medicamento={selectedMedForDespacho}
-        onClose={() => setDespachoModalVisible(false)}
-        onSuccess={handleDespachoSuccess}
-      />
     </View>
   );
 }
@@ -478,7 +640,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   searchIcon: { marginRight: 8 },
-  searchInput: { flex: 1, paddingVertical: 12, fontSize: 16 },
+  searchInput: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#1F2937' },
   headerButtons: { flexDirection: 'row', gap: 8 },
   filterButton: {
     flex: 1,
@@ -516,7 +678,23 @@ const styles = StyleSheet.create({
   filterChipText: { color: '#4B5563', fontWeight: '500' },
   filterChipTextActive: { color: 'white' },
   content: { flex: 1, padding: 16 },
-  resultsText: { fontSize: 14, color: '#6B7280', marginBottom: 12 },
+  resultsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  resultsText: { fontSize: 14, color: '#6B7280' },
+  pdfButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EDE9FE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  pdfButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 12 },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 40 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
   emptyText: { fontSize: 14, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
@@ -543,6 +721,7 @@ const styles = StyleSheet.create({
   medPresentation: { fontSize: 14, color: '#6B7280', marginBottom: 2 },
   medCategory: { fontSize: 12, color: '#9CA3AF' },
   medUbicacion: { fontSize: 12, color: '#10B981', marginTop: 4 },
+  medUser: { fontSize: 10, color: '#7C3AED', fontStyle: 'italic', marginTop: 4 },
   medImage: { width: 60, height: 60, borderRadius: 8, marginLeft: 12 },
   zoomHint: {
     position: 'absolute',
@@ -571,17 +750,6 @@ const styles = StyleSheet.create({
     borderTopColor: '#E5E7EB',
     paddingTop: 8,
   },
-  despacharButton: {
-    flex: 1,
-    backgroundColor: '#7C3AED',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-    borderRadius: 8,
-    gap: 6,
-  },
-  despacharButtonText: { color: 'white', fontWeight: '600', fontSize: 14 },
   deleteButton: {
     flex: 1,
     flexDirection: 'row',

@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { db } from '../../firebaseConfig';
 import {
   collection,
@@ -40,9 +41,12 @@ import DatePickerInput from '../components/DatePickerInput';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import CategoriaPicker from '../components/CategoriaPicker';
-export default function RegisterScreen() {
+
+export default function RegisterScreen({ user }) {
   const [step, setStep] = useState('capture');
-  const [image, setImage] = useState(null);
+  const [imageUri, setImageUri] = useState(null);
+  const [imageBase64, setImageBase64] = useState(null);
+  const [comprimiendo, setComprimiendo] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [checkingDuplicate, setCheckingDuplicate] = useState(false);
   const [duplicateFound, setDuplicateFound] = useState(null);
@@ -69,7 +73,10 @@ export default function RegisterScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
 
-  // Cargar el último medicamento registrado
+  const getUserName = () => {
+    return user?.nombre || user?.email?.split('@')[0] || 'usuario';
+  };
+
   useEffect(() => {
     cargarUltimoMedicamento();
   }, []);
@@ -90,17 +97,67 @@ export default function RegisterScreen() {
     }
   };
 
+  // 👈 NUEVA FUNCIÓN: Comprimir imagen
+  const comprimirImagen = async (uri) => {
+    if (!uri) return null;
+
+    setComprimiendo(true);
+    try {
+      // Primera compresión: 800px ancho, calidad 0.5
+      let resultado = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 800 } }], {
+        compress: 0.5,
+        base64: true,
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
+
+      // Calcular peso aproximado (base64 pesa ~1.33x el original)
+      let pesoKB = (resultado.base64.length * 0.75) / 1024;
+      console.log(`Imagen comprimida: ${pesoKB.toFixed(2)} KB`);
+
+      // Si aún pesa más de 800KB, comprimir más
+      if (pesoKB > 800) {
+        resultado = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 600 } }], {
+          compress: 0.3,
+          base64: true,
+          format: ImageManipulator.SaveFormat.JPEG,
+        });
+        pesoKB = (resultado.base64.length * 0.75) / 1024;
+        console.log(`Imagen ultra comprimida: ${pesoKB.toFixed(2)} KB`);
+      }
+
+      return resultado.base64;
+    } catch (error) {
+      console.error('Error comprimiendo imagen:', error);
+      return null;
+    } finally {
+      setComprimiendo(false);
+    }
+  };
+
   const takePicture = async () => {
     if (!cameraRef.current) return;
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.7,
+        quality: 0.8, // Calidad alta para IA
         base64: true,
       });
-      setImage(photo.uri);
+      if (!photo.uri) {
+        Alert.alert('Error', 'No se pudo obtener la imagen');
+        return;
+      }
+      setImageUri(photo.uri);
+
+      // 1. PRIMERO: Enviar a Gemini con la imagen original (alta calidad)
       setStep('processing');
-      processImageWithAI(photo.base64);
+      const exitoIA = await processImageWithAI(photo.base64);
+
+      // 2. DESPUÉS: Comprimir la imagen para guardar (solo si la IA funcionó)
+      if (exitoIA) {
+        const base64Comprimido = await comprimirImagenParaStorage(photo.uri);
+        setImageBase64(base64Comprimido);
+      }
     } catch (error) {
+      console.error('Error tomando foto:', error);
       Alert.alert('Error', 'No se pudo tomar la foto');
       setStep('capture');
     }
@@ -110,38 +167,54 @@ export default function RegisterScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
-      quality: 0.7,
+      quality: 0.8, // Calidad alta para IA
       base64: true,
     });
-    if (!result.canceled) {
-      setImage(result.assets[0].uri);
+    if (!result.canceled && result.assets[0].uri) {
+      setImageUri(result.assets[0].uri);
+
       setStep('processing');
-      processImageWithAI(result.assets[0].base64);
+      const exitoIA = await processImageWithAI(result.assets[0].base64);
+
+      if (exitoIA && result.assets[0].uri) {
+        const base64Comprimido = await comprimirImagenParaStorage(result.assets[0].uri);
+        setImageBase64(base64Comprimido);
+      }
     }
   };
 
-  const processImageWithAI = async (base64Image) => {
+  // Modificar processImageWithAI para que devuelva boolean
+  const processImageWithAI = async (base64Image, intentos = 2) => {
     setProcessing(true);
-    try {
-      const apiKey = await AsyncStorage.getItem('gemini_api_key');
-      if (!apiKey) {
-        Alert.alert('Error', 'Configura tu API Key de Gemini primero');
-        setStep('capture');
-        setProcessing(false);
-        return;
-      }
 
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `Analiza esta imagen de un medicamento y extrae la siguiente información en formato JSON:
+    for (let i = 0; i < intentos; i++) {
+      try {
+        const apiKey = await AsyncStorage.getItem('gemini_api_key');
+        if (!apiKey) {
+          Alert.alert('Error', 'Configura tu API Key de Gemini primero');
+          setStep('capture');
+          setProcessing(false);
+          return false;
+        }
+
+        const tamañoKB = (base64Image.length * 0.75) / 1024;
+        console.log(`📸 Intento ${i + 1}: ${tamañoKB.toFixed(2)} KB`);
+
+        // Timeout de 15 segundos para no quedarse colgado
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    {
+                      text: `Analiza esta imagen de un medicamento y extrae la siguiente información en formato JSON:
                           {
                             "nombre": "nombre del medicamento",
                             "presentacion": "presentación completa (ej: Tabletas 500mg, solución inyectable 1g/2ml, crema 30g)",
@@ -149,36 +222,114 @@ export default function RegisterScreen() {
                             "vencimiento": "fecha de vencimiento en formato YYYY-MM-DD"
                           }
                           IMPORTANTE: La categoría debe ser lo más específica posible dentro de las opciones listadas. Si no estás seguro, usa "Otros". No inventes categorías fuera de la lista.`,
-                  },
-                  { inline_data: { mime_type: 'image/jpeg', data: base64Image } },
-                ],
-              },
-            ],
-          }),
+                    },
+                    { inline_data: { mime_type: 'image/jpeg', data: base64Image } },
+                  ],
+                },
+              ],
+            }),
+            signal: controller.signal,
+          }
+        );
+
+        clearTimeout(timeoutId);
+        const data = await response.json();
+
+        // Error 503 - Servidor saturado
+        if (data.error && data.error.code === 503) {
+          if (i === intentos - 1) {
+            // Último intento fallido, ofrecer modo manual
+            Alert.alert(
+              'Servicio ocupado',
+              'Gemini está con mucha demanda en este momento. ¿Quieres ingresar los datos manualmente?',
+              [
+                { text: 'Reintentar', onPress: () => processImageWithAI(base64Image, 1) },
+                { text: 'Ingresar manual', onPress: () => setStep('form') },
+                { text: 'Cancelar', onPress: () => setStep('capture') },
+              ]
+            );
+            setProcessing(false);
+            return false;
+          }
+          // Esperar antes de reintentar (solo si no es el último intento)
+          const espera = 3000;
+          console.log(`⚠️ Gemini ocupado, reintentando en ${espera / 1000}s...`);
+          await new Promise((resolve) => setTimeout(resolve, espera));
+          continue;
         }
+
+        // Otros errores
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        if (!data.candidates || !data.candidates[0]) {
+          throw new Error('Respuesta inválida de Gemini');
+        }
+
+        const text = data.candidates[0].content.parts[0].text;
+        const cleanedText = text.replace(/```json|```/g, '').trim();
+        const aiData = JSON.parse(cleanedText);
+
+        setFormData({
+          nombre: aiData.nombre || '',
+          presentacion: aiData.presentacion || '',
+          categoria: aiData.categoria || '',
+          cantidad: '',
+          vencimiento: aiData.vencimiento || '',
+          ubicacion: '',
+        });
+
+        setStep('form');
+        return true;
+      } catch (error) {
+        console.error(`Intento ${i + 1} fallido:`, error);
+
+        if (error.name === 'AbortError') {
+          console.log('⏰ Timeout - Gemini no responde');
+        }
+
+        if (i === intentos - 1) {
+          Alert.alert(
+            'Error de conexión',
+            'No se pudo conectar con el servicio de IA. ¿Quieres ingresar los datos manualmente?',
+            [
+              { text: 'Reintentar', onPress: () => processImageWithAI(base64Image, 1) },
+              { text: 'Ingresar manual', onPress: () => setStep('form') },
+              { text: 'Cancelar', onPress: () => setStep('capture') },
+            ]
+          );
+          setProcessing(false);
+          return false;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+
+    setProcessing(false);
+    return false;
+  };
+
+  // Nueva función: Comprimir SOLO para almacenamiento (no para IA)
+  const comprimirImagenParaStorage = async (uri) => {
+    if (!uri) return null;
+
+    try {
+      // Compresión más agresiva para almacenar
+      const resultado = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 600 } }], // Más pequeño
+        { compress: 0.3, base64: true, format: ImageManipulator.SaveFormat.JPEG }
       );
 
-      const data = await response.json();
-      const text = data.candidates[0].content.parts[0].text;
-      const cleanedText = text.replace(/```json|```/g, '').trim();
-      const aiData = JSON.parse(cleanedText);
+      const pesoKB = (resultado.base64.length * 0.75) / 1024;
+      console.log(`Imagen para almacenamiento: ${pesoKB.toFixed(2)} KB`);
 
-      setFormData({
-        nombre: aiData.nombre || '',
-        presentacion: aiData.presentacion || '',
-        categoria: aiData.categoria || '',
-        cantidad: '',
-        vencimiento: aiData.vencimiento || '',
-        ubicacion: '',
-      });
-
-      setStep('form');
+      return resultado.base64;
     } catch (error) {
-      console.error('Error procesando imagen:', error);
-      Alert.alert('Error', 'No se pudo analizar la imagen. Completa los datos manualmente.');
-      setStep('form');
-    } finally {
-      setProcessing(false);
+      console.error('Error comprimiendo imagen para storage:', error);
+      return null;
     }
   };
 
@@ -210,14 +361,23 @@ export default function RegisterScreen() {
 
   const saveNewMedicamento = async (medData) => {
     try {
-      await addDoc(collection(db, 'medicamentos'), medData);
-      await cargarUltimoMedicamento(); // Recargar el último medicamento
+      const userName = getUserName();
+      const medDataWithUser = {
+        ...medData,
+        userId: userName,
+        userName: userName,
+        imagen: imageBase64, // 👈 Base64 comprimido
+        fechaRegistro: new Date().toISOString(),
+      };
+      await addDoc(collection(db, 'medicamentos'), medDataWithUser);
+      await cargarUltimoMedicamento();
       Alert.alert('Éxito', 'Medicamento registrado correctamente', [
         {
           text: 'OK',
           onPress: () => {
             setStep('capture');
-            setImage(null);
+            setImageUri(null);
+            setImageBase64(null);
             setFormData({
               nombre: '',
               presentacion: '',
@@ -230,7 +390,12 @@ export default function RegisterScreen() {
         },
       ]);
     } catch (error) {
-      Alert.alert('Error', 'No se pudo guardar el medicamento');
+      console.error('Error guardando:', error);
+      if (error.code === 'firestore/invalid-argument' || error.message?.includes('bytes')) {
+        Alert.alert('Error', 'La imagen es demasiado grande. Intenta con una foto más pequeña.');
+      } else {
+        Alert.alert('Error', 'No se pudo guardar el medicamento');
+      }
     }
   };
 
@@ -242,6 +407,7 @@ export default function RegisterScreen() {
         cantidad: cantidadNueva,
         fechaBaja: null,
         fechaReactivacion: new Date().toISOString(),
+        userIdReactivacion: getUserName(),
       });
       await cargarUltimoMedicamento();
       Alert.alert('Éxito', 'Medicamento reactivado correctamente', [
@@ -249,7 +415,8 @@ export default function RegisterScreen() {
           text: 'OK',
           onPress: () => {
             setStep('capture');
-            setImage(null);
+            setImageUri(null);
+            setImageBase64(null);
             setFormData({
               nombre: '',
               presentacion: '',
@@ -267,7 +434,7 @@ export default function RegisterScreen() {
   };
 
   const handleSaveNewMed = async () => {
-    if (isSaving) return;
+    if (isSaving || comprimiendo) return;
     if (!formData.nombre || !formData.cantidad || !formData.vencimiento) {
       Alert.alert('Error', 'Completa los campos obligatorios: Nombre, Cantidad y Vencimiento');
       return;
@@ -283,8 +450,6 @@ export default function RegisterScreen() {
       cantidad: parseInt(formData.cantidad),
       vencimiento: formData.vencimiento,
       ubicacion: formData.ubicacion.trim() || '',
-      imagen: image,
-      fechaRegistro: new Date().toISOString(),
       activo: true,
       fechaBaja: null,
     };
@@ -321,7 +486,12 @@ export default function RegisterScreen() {
     try {
       const nuevaCantidad = duplicateFound.cantidad + parseInt(formData.cantidad);
       const medRef = doc(db, 'medicamentos', duplicateFound.id);
-      await updateDoc(medRef, { cantidad: nuevaCantidad, activo: true, fechaBaja: null });
+      await updateDoc(medRef, {
+        cantidad: nuevaCantidad,
+        activo: true,
+        fechaBaja: null,
+        userIdActualizacion: getUserName(),
+      });
       await cargarUltimoMedicamento();
       setShowDuplicateModal(false);
       setDuplicateFound(null);
@@ -333,7 +503,8 @@ export default function RegisterScreen() {
             text: 'OK',
             onPress: () => {
               setStep('capture');
-              setImage(null);
+              setImageUri(null);
+              setImageBase64(null);
               setFormData({
                 nombre: '',
                 presentacion: '',
@@ -359,8 +530,6 @@ export default function RegisterScreen() {
       cantidad: parseInt(formData.cantidad),
       vencimiento: formData.vencimiento,
       ubicacion: formData.ubicacion.trim() || '',
-      imagen: image,
-      fechaRegistro: new Date().toISOString(),
       activo: true,
       fechaBaja: null,
     };
@@ -438,9 +607,6 @@ export default function RegisterScreen() {
                 Ubicación: {duplicateFound.ubicacion || 'No especificada'}
               </Text>
               <Text style={styles.duplicateDetail}>
-                Estado: {duplicateFound.activo === false ? '⚠️ Inactivo' : '✅ Activo'}
-              </Text>
-              <Text style={styles.duplicateDetail}>
                 Vence: {new Date(duplicateFound.vencimiento).toLocaleDateString()}
               </Text>
             </View>
@@ -461,14 +627,14 @@ export default function RegisterScreen() {
                 onPress={handleSumarAExistente}
               >
                 <Package color="white" size={20} />
-                <Text>Sumar al existente</Text>
+                <Text style={{ color: 'white' }}>Sumar al existente</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.duplicateButton, styles.nuevoButton]}
                 onPress={handleCrearNuevoLote}
               >
                 <Plus color="white" size={20} />
-                <Text>Crear nuevo lote</Text>
+                <Text style={{ color: 'white' }}>Crear nuevo lote</Text>
               </TouchableOpacity>
               {duplicateFound.activo === false && (
                 <TouchableOpacity
@@ -478,7 +644,7 @@ export default function RegisterScreen() {
                   }
                 >
                   <Check color="white" size={20} />
-                  <Text>Reactivar existente</Text>
+                  <Text style={{ color: 'white' }}>Reactivar existente</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -524,20 +690,24 @@ export default function RegisterScreen() {
             </TouchableOpacity>
           </View>
 
-          {image && (
+          {imageUri && (
             <View style={styles.previewContainer}>
-              {processing && (
+              {(processing || comprimiendo) && (
                 <View style={styles.processingOverlay}>
                   <ActivityIndicator color="white" size="large" />
-                  <Text style={styles.processingText}>Analizando imagen...</Text>
+                  <Text style={styles.processingText}>
+                    {comprimiendo ? 'Comprimiendo imagen...' : 'Analizando imagen...'}
+                  </Text>
                 </View>
               )}
-              <Image source={{ uri: image }} style={styles.previewImage} />
+              <Image source={{ uri: imageUri }} style={styles.previewImage} />
               <TouchableOpacity
                 style={styles.clearImage}
                 onPress={() => {
-                  setImage(null);
+                  setImageUri(null);
+                  setImageBase64(null);
                   setProcessing(false);
+                  setComprimiendo(false);
                 }}
               >
                 <X color="white" size={16} />
@@ -545,7 +715,6 @@ export default function RegisterScreen() {
             </View>
           )}
 
-          {/* Sección: Último medicamento registrado */}
           {ultimoMedicamento && (
             <View style={styles.ultimoMedicamentoSection}>
               <Text style={styles.ultimoMedicamentoTitle}>📋 ÚLTIMO MEDICAMENTO REGISTRADO</Text>
@@ -558,9 +727,15 @@ export default function RegisterScreen() {
                     {ultimoMedicamento.ubicacion && (
                       <Text style={styles.ultimoUbicacion}>📍 {ultimoMedicamento.ubicacion}</Text>
                     )}
+                    <Text style={styles.ultimoUser}>
+                      👤 Registrado por: {ultimoMedicamento.userName || 'usuario'}
+                    </Text>
                   </View>
                   {ultimoMedicamento.imagen && (
-                    <Image source={{ uri: ultimoMedicamento.imagen }} style={styles.ultimoImage} />
+                    <Image
+                      source={{ uri: `data:image/jpeg;base64,${ultimoMedicamento.imagen}` }}
+                      style={styles.ultimoImage}
+                    />
                   )}
                 </View>
                 <View style={styles.ultimoDetails}>
@@ -589,7 +764,6 @@ export default function RegisterScreen() {
           )}
         </ScrollView>
 
-        {/* Modal de entrada manual - DENTRO del mismo return */}
         <Modal visible={manualModalVisible} animationType="slide" transparent={true}>
           <View style={styles.modalOverlay}>
             <KeyboardAvoidingScrollView style={styles.modalContent}>
@@ -601,18 +775,25 @@ export default function RegisterScreen() {
               </View>
 
               <View style={styles.modalBody}>
+                <Text style={styles.label}>Nombre del medicamento *</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Nombre *"
+                  placeholder="Ej: Paracetamol"
+                  placeholderTextColor="#9CA3AF"
                   value={manualFormData.nombre}
                   onChangeText={(t) => setManualFormData({ ...manualFormData, nombre: t })}
                 />
+
+                <Text style={styles.label}>Presentación</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Presentación"
+                  placeholder="Ej: Tabletas 500mg"
+                  placeholderTextColor="#9CA3AF"
                   value={manualFormData.presentacion}
                   onChangeText={(t) => setManualFormData({ ...manualFormData, presentacion: t })}
                 />
+
+                <Text style={styles.label}>Categoría</Text>
                 <View style={{ marginBottom: 20 }}>
                   <CategoriaPicker
                     value={manualFormData.categoria}
@@ -621,22 +802,30 @@ export default function RegisterScreen() {
                     showLabel={false}
                   />
                 </View>
+
+                <Text style={styles.label}>Cantidad *</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Cantidad *"
+                  placeholder="Ej: 50"
+                  placeholderTextColor="#9CA3AF"
                   keyboardType="numeric"
                   value={manualFormData.cantidad}
                   onChangeText={(t) => setManualFormData({ ...manualFormData, cantidad: t })}
                 />
+
+                <Text style={styles.label}>Fecha de vencimiento *</Text>
                 <DatePickerInput
-                  label="Fecha de vencimiento *"
+                  label=""
                   value={manualFormData.vencimiento}
                   onChange={(date) => setManualFormData({ ...manualFormData, vencimiento: date })}
                   placeholder="Seleccionar fecha"
                 />
+
+                <Text style={styles.label}>Ubicación</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Ubicación"
+                  placeholder="Ej: Estante A3, Caja 12"
+                  placeholderTextColor="#9CA3AF"
                   value={manualFormData.ubicacion}
                   onChangeText={(t) => setManualFormData({ ...manualFormData, ubicacion: t })}
                 />
@@ -660,16 +849,12 @@ export default function RegisterScreen() {
                       cantidad: parseInt(manualFormData.cantidad),
                       vencimiento: manualFormData.vencimiento,
                       ubicacion: manualFormData.ubicacion.trim() || '',
-                      imagen: null,
-                      fechaRegistro: new Date().toISOString(),
                       activo: true,
                       fechaBaja: null,
                     };
 
                     try {
-                      await addDoc(collection(db, 'medicamentos'), medData);
-                      await cargarUltimoMedicamento();
-                      Alert.alert('Éxito', 'Medicamento registrado correctamente');
+                      await saveNewMedicamento(medData);
                       setManualFormData({
                         nombre: '',
                         presentacion: '',
@@ -713,7 +898,8 @@ export default function RegisterScreen() {
             style={styles.backButton}
             onPress={() => {
               setStep('capture');
-              setImage(null);
+              setImageUri(null);
+              setImageBase64(null);
             }}
           >
             <X color="#6B7280" size={24} />
@@ -722,7 +908,14 @@ export default function RegisterScreen() {
           <View style={{ width: 40 }} />
         </View>
 
-        {image && <Image source={{ uri: image }} style={styles.previewImageSmall} />}
+        {imageUri && <Image source={{ uri: imageUri }} style={styles.previewImageSmall} />}
+
+        {comprimiendo && (
+          <View style={styles.checkingContainer}>
+            <ActivityIndicator size="small" color="#7C3AED" />
+            <Text style={styles.checkingText}>Comprimiendo imagen...</Text>
+          </View>
+        )}
 
         {checkingDuplicate && (
           <View style={styles.checkingContainer}>
@@ -739,6 +932,7 @@ export default function RegisterScreen() {
               value={formData.nombre}
               onChangeText={(t) => setFormData({ ...formData, nombre: t })}
               placeholder="Ej: Paracetamol"
+              placeholderTextColor="#9CA3AF"
             />
           </View>
 
@@ -749,6 +943,7 @@ export default function RegisterScreen() {
               value={formData.presentacion}
               onChangeText={(t) => setFormData({ ...formData, presentacion: t })}
               placeholder="Ej: Tabletas 500mg"
+              placeholderTextColor="#9CA3AF"
             />
           </View>
 
@@ -770,12 +965,14 @@ export default function RegisterScreen() {
                 value={formData.cantidad}
                 onChangeText={(t) => setFormData({ ...formData, cantidad: t })}
                 placeholder="Ej: 50"
+                placeholderTextColor="#9CA3AF"
                 keyboardType="numeric"
               />
             </View>
             <View style={[styles.inputGroup, { flex: 1 }]}>
+              <Text style={styles.label}>Fecha de vencimiento *</Text>
               <DatePickerInput
-                label="Fecha de vencimiento"
+                label=""
                 value={formData.vencimiento}
                 onChange={(date) => setFormData({ ...formData, vencimiento: date })}
                 placeholder="Seleccionar fecha"
@@ -791,6 +988,7 @@ export default function RegisterScreen() {
               value={formData.ubicacion}
               onChangeText={(t) => setFormData({ ...formData, ubicacion: t })}
               placeholder="Ej: Estante A3, Caja 12"
+              placeholderTextColor="#9CA3AF"
               maxLength={255}
             />
           </View>
@@ -798,12 +996,12 @@ export default function RegisterScreen() {
           <TouchableOpacity
             style={[
               styles.saveButton,
-              (checkingDuplicate || isSaving) && styles.saveButtonDisabled,
+              (checkingDuplicate || isSaving || comprimiendo) && styles.saveButtonDisabled,
             ]}
             onPress={handleSaveNewMed}
-            disabled={checkingDuplicate || isSaving}
+            disabled={checkingDuplicate || isSaving || comprimiendo}
           >
-            {checkingDuplicate || isSaving ? (
+            {checkingDuplicate || isSaving || comprimiendo ? (
               <ActivityIndicator color="white" size="small" />
             ) : (
               <>
@@ -818,6 +1016,7 @@ export default function RegisterScreen() {
   }
 }
 
+// Mantén los mismos estilos que ya tenías
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   centered: {
@@ -972,6 +1171,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 12,
     fontSize: 16,
+    color: '#1F2937',
   },
   row: { flexDirection: 'row', marginBottom: 20 },
   saveButton: {
@@ -1025,7 +1225,6 @@ const styles = StyleSheet.create({
   sumarButton: { backgroundColor: '#10B981' },
   nuevoButton: { backgroundColor: '#7C3AED' },
   reactivarButton: { backgroundColor: '#F59E0B' },
-  // Estilos para la sección "Último medicamento registrado"
   ultimoMedicamentoSection: {
     marginHorizontal: 16,
     marginVertical: 10,
@@ -1078,6 +1277,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#10B981',
     marginTop: 2,
+  },
+  ultimoUser: {
+    fontSize: 10,
+    color: '#7C3AED',
+    marginTop: 4,
+    fontStyle: 'italic',
   },
   ultimoImage: {
     width: 50,

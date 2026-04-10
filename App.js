@@ -2,12 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { LogBox, View, ActivityIndicator } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Home, Package, PlusCircle, History, ClipboardList } from 'lucide-react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-// Ignorar warnings
+import {
+  Home,
+  Package,
+  PlusCircle,
+  History,
+  ClipboardList,
+  MinusCircle,
+} from 'lucide-react-native';
 LogBox.ignoreLogs([
   '@firebase/firestore: Firestore (12.11.0): Error using user provided cache.',
   'Setting a timer for a long period of time',
@@ -16,6 +21,7 @@ LogBox.ignoreLogs([
 import HomeScreen from './src/screens/HomeScreen';
 import InventoryScreen from './src/screens/InventoryScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
+import EntregasScreen from './src/screens/EntregasScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import PedidosScreen from './src/screens/PedidosScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
@@ -53,6 +59,10 @@ export default function App() {
   const handleLogin = (loggedUser) => {
     setUser(loggedUser);
     setIsLoggedIn(true);
+  };
+  const handleLogout = () => {
+    setUser(null);
+    setIsLoggedIn(false);
   };
 
   if (isLoading) {
@@ -104,6 +114,7 @@ export default function App() {
                     {...props}
                     user={user}
                     onOpenApiKeyModal={() => setShowApiKeyModal(true)}
+                    onLogout={handleLogout} // 👈 AGREGAR ESTA LÍNEA
                   />
                 )}
               </Tab.Screen>
@@ -112,34 +123,45 @@ export default function App() {
                 {(props) => <InventoryScreen {...props} user={user} />}
               </Tab.Screen>
 
-              {/* Registrar solo visible para admin */}
               {isUserAdmin && (
                 <Tab.Screen
                   name="Registrar"
-                  component={RegisterScreen}
                   options={{
                     tabBarIcon: ({ color, size }) => <PlusCircle color={color} size={size} />,
                   }}
-                />
+                >
+                  {(props) => <RegisterScreen {...props} user={user} />}
+                </Tab.Screen>
               )}
 
-              {/* Pedidos visible para todos */}
+              {/* 👈 Pantalla Entregas */}
+              {isUserAdmin && (
+                <Tab.Screen
+                  name="Entregas"
+                  options={{
+                    tabBarIcon: ({ color, size }) => <MinusCircle color={color} size={size} />,
+                  }}
+                >
+                  {(props) => <EntregasScreen {...props} user={user} />}
+                </Tab.Screen>
+              )}
               <Tab.Screen
                 name="Pedidos"
-                component={PedidosScreen}
                 options={{
                   tabBarIcon: ({ color, size }) => <ClipboardList color={color} size={size} />,
                 }}
-              />
+              >
+                {(props) => <PedidosScreen {...props} user={user} />}
+              </Tab.Screen>
 
-              {/* Historial visible para todos */}
               <Tab.Screen
                 name="Historial"
-                component={HistoryScreen}
                 options={{
                   tabBarIcon: ({ color, size }) => <History color={color} size={size} />,
                 }}
-              />
+              >
+                {(props) => <HistoryScreen {...props} user={user} />}
+              </Tab.Screen>
             </Tab.Navigator>
           ) : (
             <LoginModal visible={!isLoggedIn} onLogin={handleLogin} />
