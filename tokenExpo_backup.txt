@@ -1,0 +1,52 @@
+******************************************************************************
+Así se compila pues ya el token está en bashrc:
+git add .
+git commit -m "descripción del cambio"
+git push
+
+del github:
+user:letraalquesirve
+passw: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
+
+Luego mediante WEB ir a:
+https://expo.dev/accounts/letraalquesirve/projects/FarmaciaApp
+
+encima ir mediante el botón de Build From HitHub
+
+Luego esperar a que termine y descargar la APK desde:
+https://expo.dev/accounts/letraalquesirve/projects/FarmaciaApp/builds
+
+********************************************************************************
+
+por la vía de comandos es así:
+EXPO_TOKEN=VC4AW_AxhFILpW8LgXtkMV0j9PzLS-L9xBsxWPSJ NODE_OPTIONS="--dns-result-order=ipv4first" npx eas-cli@latest build -p android --profile preview --no-wait
+
+para probar este es el
+Gemini APIKey: AIzaSyBe7NNnIODkRKhSUnmvELd1Jl0Rvw_iWaA
+
+para ver y cambiar el token de Expo:
+https://expo.dev/accounts/letraalquesirve/settings/access-tokens
+Created Mar 27, 2026 3:58 PM
+token_letraalquesirve:VC4AW_AxhFILpW8LgXtkMV0j9PzLS-L9xBsxWPSJ
+googeletraalquesirveElyon8888*
+
+
+
+EXPO_TOKEN=VC4AW_AxhFILpW8LgXtkMV0j9PzLS-L9xBsxWPSJ npx eas-cli@latest build -p android --profile preview
+ó
+EXPO_TOKEN=VC4AW_AxhFILpW8LgXtkMV0j9PzLS-L9xBsxWPSJ npx eas-cli@latest build -p android --profile preview --no-wait
+
+Prueba agregar un timeout más largo con Node:
+EXPO_TOKEN=VC4AW_AxhFILpW8LgXtkMV0j9PzLS-L9xBsxWPSJ NODE_OPTIONS="--dns-result-order=ipv4first" npx eas-cli@latest build -p android --profile preview --no-wait
+
+Para verificar que el proyecto esté vinculado
+EXPO_TOKEN=VC4AW_AxhFILpW8LgXtkMV0j9PzLS-L9xBsxWPSJ npx eas-cli@latest project:info
+
+prompt: `Analiza esta imagen de un medicamento y extrae la siguiente información en formato JSON:
+                          {
+                            "nombre": "nombre del medicamento",
+                            "presentacion": "presentación completa (ej: Tabletas 500mg, solución inyectable 1g/2ml, crema 30g)",
+                            "categoria": "categoría farmacológica según su uso (ej: Analgésico, Antibiótico, Antiinflamatorio, Antihipertensivo, Antidiabético, Antihistamínico, Antidepresivo, Ansiolítico, Anticonvulsivante, Anticoagulante, Broncodilatador, Corticosteroide, Diurético, Relajante muscular, Vitaminas, Suplemento, Antiséptico, Antifúngico, Antiviral, Antiparasitario, Antiemético, Antiespasmódico, Laxante, Antidiarreico, Antiácido, Expectorante, Antitusivo, Descongestionante, Otros)",
+                            "vencimiento": "fecha de vencimiento en formato YYYY-MM-DD"
+                          }
+                          IMPORTANTE: La categoría debe ser lo más específica posible dentro de las opciones listadas. Si no estás seguro, usa "Otros". No inventes categorías fuera de la lista.`

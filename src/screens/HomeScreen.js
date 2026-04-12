@@ -13,7 +13,18 @@ import {
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { db } from '../../firebaseConfig';
-import { collection, onSnapshot, query, orderBy, where, doc, deleteDoc, limit, startAfter, getDocs } from 'firebase/firestore';
+import {
+  collection,
+  onSnapshot,
+  query,
+  orderBy,
+  where,
+  doc,
+  deleteDoc,
+  limit,
+  startAfter,
+  getDocs,
+} from 'firebase/firestore';
 import {
   Package,
   AlertCircle,
@@ -75,7 +86,7 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
         q = query(
           collection(db, 'medicamentos'),
           where('activo', '==', false),
-          orderBy('fechaBaja', 'desc'),  // ← Esto requiere índice
+          orderBy('fechaBaja', 'desc'), // ← Esto requiere índice
           limit(50)
         );
       } else {
@@ -89,12 +100,12 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       }
 
       const snapshot = await getDocs(q);
-      const nuevosInactivos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const nuevosInactivos = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
       if (reset) {
         setInactivosVisibles(nuevosInactivos);
       } else {
-        setInactivosVisibles(prev => [...prev, ...nuevosInactivos]);
+        setInactivosVisibles((prev) => [...prev, ...nuevosInactivos]);
       }
 
       setUltimoDocInactivos(snapshot.docs[snapshot.docs.length - 1]);
@@ -117,7 +128,7 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
   const handleUserPress = () => {
     Alert.alert('Cerrar Sesión', `¿Deseas cerrar la sesión de ${user?.nombre || 'usuario'}?`, [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Salir', style: 'destructive', onPress: () => onLogout() }
+      { text: 'Salir', style: 'destructive', onPress: () => onLogout() },
     ]);
   };
 
@@ -163,13 +174,23 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
 
     try {
       const today = new Date().toLocaleDateString('es-ES', {
-        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
       });
 
       let tableRows = '';
       medicamentosList.forEach((med, index) => {
-        const status = med.activo === false ? 'INACTIVO' : (getDaysUntilExpiry(med.vencimiento) < 0 ? 'VENCIDO' :
-          (getDaysUntilExpiry(med.vencimiento) <= 30 ? 'POR VENCER' : 'VIGENTE'));
+        const status =
+          med.activo === false
+            ? 'INACTIVO'
+            : getDaysUntilExpiry(med.vencimiento) < 0
+              ? 'VENCIDO'
+              : getDaysUntilExpiry(med.vencimiento) <= 30
+                ? 'POR VENCER'
+                : 'VIGENTE';
 
         tableRows += `
           <tr style="background-color: ${index % 2 === 0 ? '#f9fafb' : 'white'}">
@@ -233,7 +254,10 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
 
       const { uri } = await Print.printToFileAsync({ html });
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Compartir reporte' });
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Compartir reporte',
+        });
       } else {
         Alert.alert('Error', 'No es posible compartir archivos en este dispositivo');
       }
@@ -247,38 +271,71 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
 
   // Funciones para cada tipo de PDF
   const handlePDFActivos = () => {
-    const activos = medicamentos.filter(m => m.activo !== false);
-    generatePDFForMedicamentos(activos, 'LISTADO DE MEDICAMENTOS ACTIVOS', 'Total de medicamentos activos');
+    const activos = medicamentos.filter((m) => m.activo !== false);
+    generatePDFForMedicamentos(
+      activos,
+      'LISTADO DE MEDICAMENTOS ACTIVOS',
+      'Total de medicamentos activos'
+    );
   };
 
   const handlePDFVigentes = () => {
-    const vigentes = medicamentos.filter(m => m.activo !== false && getDaysUntilExpiry(m.vencimiento) > 30);
-    generatePDFForMedicamentos(vigentes, 'LISTADO DE MEDICAMENTOS VIGENTES', 'Medicamentos con vencimiento > 30 días');
+    const vigentes = medicamentos.filter(
+      (m) => m.activo !== false && getDaysUntilExpiry(m.vencimiento) > 30
+    );
+    generatePDFForMedicamentos(
+      vigentes,
+      'LISTADO DE MEDICAMENTOS VIGENTES',
+      'Medicamentos con vencimiento > 30 días'
+    );
   };
 
   const handlePDFPorVencer = () => {
-    const porVencer = medicamentos.filter(m => m.activo !== false && getDaysUntilExpiry(m.vencimiento) >= 0 && getDaysUntilExpiry(m.vencimiento) <= 30);
-    generatePDFForMedicamentos(porVencer, 'LISTADO DE MEDICAMENTOS POR VENCER', 'Medicamentos con vencimiento en 0-30 días');
+    const porVencer = medicamentos.filter(
+      (m) =>
+        m.activo !== false &&
+        getDaysUntilExpiry(m.vencimiento) >= 0 &&
+        getDaysUntilExpiry(m.vencimiento) <= 30
+    );
+    generatePDFForMedicamentos(
+      porVencer,
+      'LISTADO DE MEDICAMENTOS POR VENCER',
+      'Medicamentos con vencimiento en 0-30 días'
+    );
   };
 
   const handlePDFVencidos = () => {
-    const vencidos = medicamentos.filter(m => m.activo !== false && getDaysUntilExpiry(m.vencimiento) < 0);
-    generatePDFForMedicamentos(vencidos, 'LISTADO DE MEDICAMENTOS VENCIDOS', 'Medicamentos vencidos');
+    const vencidos = medicamentos.filter(
+      (m) => m.activo !== false && getDaysUntilExpiry(m.vencimiento) < 0
+    );
+    generatePDFForMedicamentos(
+      vencidos,
+      'LISTADO DE MEDICAMENTOS VENCIDOS',
+      'Medicamentos vencidos'
+    );
   };
 
   const handlePDFInactivos = () => {
-    const inactivos = medicamentos.filter(m => m.activo === false);
-    generatePDFForMedicamentos(inactivos, 'LISTADO DE MEDICAMENTOS INACTIVOS', 'Total de medicamentos inactivos');
+    const inactivos = medicamentos.filter((m) => m.activo === false);
+    generatePDFForMedicamentos(
+      inactivos,
+      'LISTADO DE MEDICAMENTOS INACTIVOS',
+      'Total de medicamentos inactivos'
+    );
   };
 
   const medicamentosActivos = medicamentos.filter((m) => m.activo !== false);
   const medicamentosInactivos = medicamentos.filter((m) => m.activo === false);
-  const medicamentosVencidos = medicamentosActivos.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
+  const medicamentosVencidos = medicamentosActivos.filter(
+    (m) => getDaysUntilExpiry(m.vencimiento) < 0
+  );
   const medicamentosPorVencer = medicamentosActivos.filter((m) => {
     const days = getDaysUntilExpiry(m.vencimiento);
     return days >= 0 && days <= 30;
   });
-  const medicamentosVigentes = medicamentosActivos.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
+  const medicamentosVigentes = medicamentosActivos.filter(
+    (m) => getDaysUntilExpiry(m.vencimiento) > 30
+  );
 
   if (loading) {
     return (
@@ -320,19 +377,31 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           <FileText size={14} color="#7C3AED" style={styles.pdfIcon} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.statCard, styles.statVigente]} onPress={handlePDFVigentes} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={[styles.statCard, styles.statVigente]}
+          onPress={handlePDFVigentes}
+          activeOpacity={0.7}
+        >
           <Text style={styles.statNumber}>{medicamentosVigentes.length}</Text>
           <Text style={styles.statLabel}>Vigentes</Text>
           <FileText size={14} color="#10B981" style={styles.pdfIcon} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.statCard, styles.statPorVencer]} onPress={handlePDFPorVencer} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={[styles.statCard, styles.statPorVencer]}
+          onPress={handlePDFPorVencer}
+          activeOpacity={0.7}
+        >
           <Text style={styles.statNumber}>{medicamentosPorVencer.length}</Text>
           <Text style={styles.statLabel}>Por vencer</Text>
           <FileText size={14} color="#EA580C" style={styles.pdfIcon} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.statCard, styles.statVencido]} onPress={handlePDFVencidos} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={[styles.statCard, styles.statVencido]}
+          onPress={handlePDFVencidos}
+          activeOpacity={0.7}
+        >
           <Text style={styles.statNumber}>{medicamentosVencidos.length}</Text>
           <Text style={styles.statLabel}>Vencidos</Text>
           <FileText size={14} color="#DC2626" style={styles.pdfIcon} />
@@ -342,15 +411,24 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       {/* Inactivos con paginación */}
       {medicamentosInactivos.length > 0 && (
         <View style={styles.inactivosCard}>
-          <TouchableOpacity style={styles.inactivosHeader} onPress={() => setShowInactivos(!showInactivos)}>
+          <TouchableOpacity
+            style={styles.inactivosHeader}
+            onPress={() => setShowInactivos(!showInactivos)}
+          >
             <View style={styles.inactivosTitle}>
               <AlertCircle color="#6B7280" size={20} />
-              <Text style={styles.inactivosTitleText}>Medicamentos Inactivos ({medicamentosInactivos.length})</Text>
+              <Text style={styles.inactivosTitleText}>
+                Medicamentos Inactivos ({medicamentosInactivos.length})
+              </Text>
               <TouchableOpacity onPress={handlePDFInactivos} style={styles.inlinePdfButton}>
                 <FileText size={16} color="#7C3AED" />
               </TouchableOpacity>
             </View>
-            {showInactivos ? <ChevronUp color="#6B7280" size={20} /> : <ChevronDown color="#6B7280" size={20} />}
+            {showInactivos ? (
+              <ChevronUp color="#6B7280" size={20} />
+            ) : (
+              <ChevronDown color="#6B7280" size={20} />
+            )}
           </TouchableOpacity>
 
           {showInactivos && (
@@ -361,10 +439,16 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
                     <Text style={styles.inactivoNombre}>{med.nombre}</Text>
                     <Text style={styles.inactivoPresentacion}>{med.presentacion}</Text>
                     <Text style={styles.inactivoFecha}>
-                      Dado de baja: {med.fechaBaja ? new Date(med.fechaBaja).toLocaleDateString() : 'Fecha desconocida'}
+                      Dado de baja:{' '}
+                      {med.fechaBaja
+                        ? new Date(med.fechaBaja).toLocaleDateString()
+                        : 'Fecha desconocida'}
                     </Text>
                   </View>
-                  <TouchableOpacity onPress={() => handleDeleteMed(med.id, med.nombre)} style={styles.deleteInactivoButton}>
+                  <TouchableOpacity
+                    onPress={() => handleDeleteMed(med.id, med.nombre)}
+                    style={styles.deleteInactivoButton}
+                  >
                     <Trash color="#DC2626" size={18} />
                   </TouchableOpacity>
                 </View>
@@ -376,7 +460,10 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
                 </View>
               )}
               {!cargandoInactivos && hayMasInactivos && (
-                <TouchableOpacity style={styles.loadMoreButton} onPress={() => cargarInactivos(false)}>
+                <TouchableOpacity
+                  style={styles.loadMoreButton}
+                  onPress={() => cargarInactivos(false)}
+                >
                   <Text style={styles.loadMoreText}>Cargar más</Text>
                 </TouchableOpacity>
               )}
@@ -388,36 +475,60 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       {/* Por vencer */}
       {medicamentosPorVencer.length > 0 && (
         <View style={styles.section}>
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => setShowPorVencer(!showPorVencer)}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setShowPorVencer(!showPorVencer)}
+          >
             <View style={styles.sectionTitle}>
               <AlertCircle color="#EA580C" size={20} />
-              <Text style={[styles.sectionTitleText, { color: '#EA580C' }]}>Por Vencer ({medicamentosPorVencer.length})</Text>
+              <Text style={[styles.sectionTitleText, { color: '#EA580C' }]}>
+                Por Vencer ({medicamentosPorVencer.length})
+              </Text>
               <TouchableOpacity onPress={handlePDFPorVencer} style={styles.inlinePdfButton}>
                 <FileText size={16} color="#EA580C" />
               </TouchableOpacity>
             </View>
-            {showPorVencer ? <ChevronUp color="#EA580C" size={20} /> : <ChevronDown color="#EA580C" size={20} />}
+            {showPorVencer ? (
+              <ChevronUp color="#EA580C" size={20} />
+            ) : (
+              <ChevronDown color="#EA580C" size={20} />
+            )}
           </TouchableOpacity>
 
-          {showPorVencer && medicamentosPorVencer.map((med) => <MedicamentoCard key={med.id} med={med} status="porVencer" />)}
+          {showPorVencer &&
+            medicamentosPorVencer.map((med) => (
+              <MedicamentoCard key={med.id} med={med} status="porVencer" />
+            ))}
         </View>
       )}
 
       {/* Vencidos */}
       {medicamentosVencidos.length > 0 && (
         <View style={styles.section}>
-          <TouchableOpacity style={styles.sectionHeader} onPress={() => setShowVencidos(!showVencidos)}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setShowVencidos(!showVencidos)}
+          >
             <View style={styles.sectionTitle}>
               <AlertCircle color="#DC2626" size={20} />
-              <Text style={[styles.sectionTitleText, { color: '#DC2626' }]}>Vencidos ({medicamentosVencidos.length})</Text>
+              <Text style={[styles.sectionTitleText, { color: '#DC2626' }]}>
+                Vencidos ({medicamentosVencidos.length})
+              </Text>
               <TouchableOpacity onPress={handlePDFVencidos} style={styles.inlinePdfButton}>
                 <FileText size={16} color="#DC2626" />
               </TouchableOpacity>
             </View>
-            {showVencidos ? <ChevronUp color="#DC2626" size={20} /> : <ChevronDown color="#DC2626" size={20} />}
+            {showVencidos ? (
+              <ChevronUp color="#DC2626" size={20} />
+            ) : (
+              <ChevronDown color="#DC2626" size={20} />
+            )}
           </TouchableOpacity>
 
-          {showVencidos && medicamentosVencidos.map((med) => <MedicamentoCard key={med.id} med={med} status="vencido" />)}
+          {showVencidos &&
+            medicamentosVencidos.map((med) => (
+              <MedicamentoCard key={med.id} med={med} status="vencido" />
+            ))}
         </View>
       )}
 
@@ -428,6 +539,7 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           <Text style={styles.emptyText}>Agrega medicamentos desde la pestaña Registrar</Text>
         </View>
       )}
+      <View style={{ height: 20 }} />
     </ScrollView>
   );
 }
@@ -469,7 +581,12 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 30,
     borderBottomRightRadius: 30,
   },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
   apiKeyButton: { backgroundColor: 'rgba(255,255,255,0.2)', padding: 10, borderRadius: 30 },
   headerTitle: { color: 'white', fontSize: 24, fontWeight: 'bold', flex: 1, textAlign: 'center' },
   userBadge: {
@@ -507,26 +624,72 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 12, color: '#6B7280', marginTop: 5, textAlign: 'center' },
   pdfIcon: { marginTop: 4, opacity: 0.6 },
   inlinePdfButton: { marginLeft: 8, padding: 4 },
-  inactivosCard: { backgroundColor: 'white', margin: 12, borderRadius: 12, padding: 12, elevation: 2 },
-  inactivosHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 8 },
+  inactivosCard: {
+    backgroundColor: 'white',
+    margin: 12,
+    borderRadius: 12,
+    padding: 12,
+    elevation: 2,
+  },
+  inactivosHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 8,
+  },
   inactivosTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   inactivosTitleText: { fontSize: 16, fontWeight: '600', color: '#6B7280', flex: 1 },
   inactivosList: { marginTop: 10 },
-  inactivoItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, backgroundColor: '#F9FAFB', borderRadius: 8, marginBottom: 8 },
+  inactivoItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    marginBottom: 8,
+  },
   inactivoInfo: { flex: 1 },
   inactivoNombre: { fontSize: 14, fontWeight: '600', color: '#1F2937' },
   inactivoPresentacion: { fontSize: 12, color: '#6B7280', marginTop: 2 },
   inactivoFecha: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
   deleteInactivoButton: { padding: 8 },
-  loadingMore: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 16, gap: 8 },
+  loadingMore: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+    gap: 8,
+  },
   loadingMoreText: { fontSize: 12, color: '#6B7280' },
-  loadMoreButton: { backgroundColor: '#F3F4F6', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 8 },
+  loadMoreButton: {
+    backgroundColor: '#F3F4F6',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 8,
+  },
   loadMoreText: { color: '#7C3AED', fontWeight: '600' },
   section: { backgroundColor: 'white', margin: 12, borderRadius: 12, padding: 12, elevation: 2 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 8 },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 8,
+  },
   sectionTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   sectionTitleText: { fontSize: 16, fontWeight: 'bold' },
-  medCard: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginVertical: 5, borderLeftWidth: 4, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 1 },
+  medCard: {
+    backgroundColor: 'white',
+    padding: 15,
+    borderRadius: 10,
+    marginVertical: 5,
+    borderLeftWidth: 4,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    elevation: 1,
+  },
   medInfo: { flex: 1 },
   medName: { fontSize: 16, fontWeight: 'bold', color: '#1F2937' },
   medPresentation: { fontSize: 14, color: '#4B5563', marginTop: 2 },

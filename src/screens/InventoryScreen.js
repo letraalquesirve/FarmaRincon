@@ -18,7 +18,18 @@ import {
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { db } from '../../firebaseConfig';
-import { collection, onSnapshot, query, orderBy, doc, updateDoc, where, limit, startAfter, getDocs } from 'firebase/firestore';
+import {
+  collection,
+  onSnapshot,
+  query,
+  orderBy,
+  doc,
+  updateDoc,
+  where,
+  limit,
+  startAfter,
+  getDocs,
+} from 'firebase/firestore';
 import {
   Search,
   Package,
@@ -92,7 +103,11 @@ export default function InventoryScreen({ user }) {
 
   // Cargar medicamentos activos (sin paginación, son pocos)
   useEffect(() => {
-    const q = query(collection(db, 'medicamentos'), where('activo', '==', true), orderBy('nombre', 'asc'));
+    const q = query(
+      collection(db, 'medicamentos'),
+      where('activo', '==', true),
+      orderBy('nombre', 'asc')
+    );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = [];
       snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
@@ -126,26 +141,24 @@ export default function InventoryScreen({ user }) {
         q = query(
           collection(db, 'medicamentos'),
           where('activo', '==', false),
-          orderBy('nombre', 'asc'),
-          limit(50)
+          orderBy('nombre', 'asc')
         );
       } else {
         q = query(
           collection(db, 'medicamentos'),
           where('activo', '==', false),
           orderBy('nombre', 'asc'),
-          startAfter(ultimoDocInactivos),
-          limit(50)
+          startAfter(ultimoDocInactivos)
         );
       }
 
       const snapshot = await getDocs(q);
-      const nuevosInactivos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const nuevosInactivos = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
       if (reset) {
         setInactivosVisibles(nuevosInactivos);
       } else {
-        setInactivosVisibles(prev => [...prev, ...nuevosInactivos]);
+        setInactivosVisibles((prev) => [...prev, ...nuevosInactivos]);
       }
 
       setUltimoDocInactivos(snapshot.docs[snapshot.docs.length - 1]);
@@ -249,14 +262,23 @@ export default function InventoryScreen({ user }) {
 
     try {
       const today = new Date().toLocaleDateString('es-ES', {
-        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
       });
 
       let tableRows = '';
       medicamentosParaPDF.forEach((med, index) => {
-        const status = med.activo === false ? 'INACTIVO' :
-          (getDaysUntilExpiry(med.vencimiento) < 0 ? 'VENCIDO' :
-            (getDaysUntilExpiry(med.vencimiento) <= 30 ? 'POR VENCER' : 'VIGENTE'));
+        const status =
+          med.activo === false
+            ? 'INACTIVO'
+            : getDaysUntilExpiry(med.vencimiento) < 0
+              ? 'VENCIDO'
+              : getDaysUntilExpiry(med.vencimiento) <= 30
+                ? 'POR VENCER'
+                : 'VIGENTE';
 
         tableRows += `
           <tr style="background-color: ${index % 2 === 0 ? '#f9fafb' : 'white'}">
@@ -320,7 +342,10 @@ export default function InventoryScreen({ user }) {
 
       const { uri } = await Print.printToFileAsync({ html });
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Compartir reporte' });
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Compartir reporte',
+        });
       } else {
         Alert.alert('Error', 'No es posible compartir archivos en este dispositivo');
       }
@@ -525,7 +550,11 @@ export default function InventoryScreen({ user }) {
           <>
             <View style={styles.resultsHeader}>
               <Text style={styles.resultsText}>{filteredMeds.length} encontrados</Text>
-              <TouchableOpacity style={styles.pdfButton} onPress={generatePDF} disabled={generatingPDF}>
+              <TouchableOpacity
+                style={styles.pdfButton}
+                onPress={generatePDF}
+                disabled={generatingPDF}
+              >
                 <FileText color="#7C3AED" size={18} />
                 <Text style={styles.pdfButtonText}>PDF</Text>
               </TouchableOpacity>
@@ -540,12 +569,19 @@ export default function InventoryScreen({ user }) {
                       <Text style={styles.medPresentation}>{med.presentacion}</Text>
                       <Text style={styles.medCategory}>📋 {med.categoria}</Text>
                       {med.ubicacion && <Text style={styles.medUbicacion}>📍 {med.ubicacion}</Text>}
-                      {med.userName && <Text style={styles.medUser}>👤 Registrado por: {med.userName}</Text>}
+                      {med.userName && (
+                        <Text style={styles.medUser}>👤 Registrado por: {med.userName}</Text>
+                      )}
                     </View>
                     {med.imagen && (
                       <TouchableOpacity onPress={() => openImageModal(med.imagen, med.nombre)}>
-                        <Image source={{ uri: `data:image/jpeg;base64,${med.imagen}` }} style={styles.medImage} />
-                        <View style={styles.zoomHint}><ZoomIn color="white" size={12} /></View>
+                        <Image
+                          source={{ uri: `data:image/jpeg;base64,${med.imagen}` }}
+                          style={styles.medImage}
+                        />
+                        <View style={styles.zoomHint}>
+                          <ZoomIn color="white" size={12} />
+                        </View>
                       </TouchableOpacity>
                     )}
                   </View>
@@ -557,7 +593,9 @@ export default function InventoryScreen({ user }) {
                     </View>
                     <View style={styles.expiryContainer}>
                       <Text style={styles.expiryLabel}>Vencimiento:</Text>
-                      <Text style={styles.expiryValue}>{new Date(med.vencimiento).toLocaleDateString()}</Text>
+                      <Text style={styles.expiryValue}>
+                        {new Date(med.vencimiento).toLocaleDateString()}
+                      </Text>
                     </View>
                     <View style={styles.statusContainer}>
                       <View style={[styles.statusBadge, getStatusColor(med.vencimiento)]}>
@@ -567,7 +605,10 @@ export default function InventoryScreen({ user }) {
                   </View>
 
                   <View style={styles.actionButtons}>
-                    <TouchableOpacity style={styles.deleteButton} onPress={() => handleSoftDelete(med.id, med.nombre)}>
+                    <TouchableOpacity
+                      style={styles.deleteButton}
+                      onPress={() => handleSoftDelete(med.id, med.nombre)}
+                    >
                       <Trash color="#DC2626" size={18} />
                       <Text style={styles.deleteButtonText}>Desactivar</Text>
                     </TouchableOpacity>
@@ -583,9 +624,14 @@ export default function InventoryScreen({ user }) {
           <>
             <View style={styles.resultsHeader}>
               <Text style={styles.resultsText}>
-                Inactivos ({getFilteredInactivos().length}{hayMasInactivos && !searchTerm ? '+' : ''})
+                Inactivos ({getFilteredInactivos().length}
+                {hayMasInactivos && !searchTerm ? '+' : ''})
               </Text>
-              <TouchableOpacity style={styles.pdfButton} onPress={generatePDF} disabled={generatingPDF}>
+              <TouchableOpacity
+                style={styles.pdfButton}
+                onPress={generatePDF}
+                disabled={generatingPDF}
+              >
                 <FileText color="#7C3AED" size={18} />
                 <Text style={styles.pdfButtonText}>PDF</Text>
               </TouchableOpacity>
@@ -606,13 +652,22 @@ export default function InventoryScreen({ user }) {
                         <Text style={styles.medName}>{med.nombre}</Text>
                         <Text style={styles.medPresentation}>{med.presentacion}</Text>
                         <Text style={styles.medCategory}>📋 {med.categoria}</Text>
-                        {med.ubicacion && <Text style={styles.medUbicacion}>📍 {med.ubicacion}</Text>}
-                        {med.userName && <Text style={styles.medUser}>👤 Registrado por: {med.userName}</Text>}
+                        {med.ubicacion && (
+                          <Text style={styles.medUbicacion}>📍 {med.ubicacion}</Text>
+                        )}
+                        {med.userName && (
+                          <Text style={styles.medUser}>👤 Registrado por: {med.userName}</Text>
+                        )}
                       </View>
                       {med.imagen && (
                         <TouchableOpacity onPress={() => openImageModal(med.imagen, med.nombre)}>
-                          <Image source={{ uri: `data:image/jpeg;base64,${med.imagen}` }} style={styles.medImage} />
-                          <View style={styles.zoomHint}><ZoomIn color="white" size={12} /></View>
+                          <Image
+                            source={{ uri: `data:image/jpeg;base64,${med.imagen}` }}
+                            style={styles.medImage}
+                          />
+                          <View style={styles.zoomHint}>
+                            <ZoomIn color="white" size={12} />
+                          </View>
                         </TouchableOpacity>
                       )}
                     </View>
@@ -624,15 +679,22 @@ export default function InventoryScreen({ user }) {
                       </View>
                       <View style={styles.expiryContainer}>
                         <Text style={styles.expiryLabel}>Vencimiento:</Text>
-                        <Text style={styles.expiryValue}>{new Date(med.vencimiento).toLocaleDateString()}</Text>
+                        <Text style={styles.expiryValue}>
+                          {new Date(med.vencimiento).toLocaleDateString()}
+                        </Text>
                       </View>
                       {med.fechaBaja && (
-                        <Text style={styles.fechaBaja}>Dado de baja: {new Date(med.fechaBaja).toLocaleDateString()}</Text>
+                        <Text style={styles.fechaBaja}>
+                          Dado de baja: {new Date(med.fechaBaja).toLocaleDateString()}
+                        </Text>
                       )}
                     </View>
 
                     <View style={styles.actionButtons}>
-                      <TouchableOpacity style={styles.reactivarButton} onPress={() => handleReactivar(med.id, med.nombre)}>
+                      <TouchableOpacity
+                        style={styles.reactivarButton}
+                        onPress={() => handleReactivar(med.id, med.nombre)}
+                      >
                         <Text style={styles.reactivarButtonText}>Reactivar</Text>
                       </TouchableOpacity>
                     </View>
@@ -651,7 +713,10 @@ export default function InventoryScreen({ user }) {
                 )}
 
                 {!cargandoInactivos && hayMasInactivos && (
-                  <TouchableOpacity style={styles.loadMoreButton} onPress={() => cargarInactivos(false)}>
+                  <TouchableOpacity
+                    style={styles.loadMoreButton}
+                    onPress={() => cargarInactivos(false)}
+                  >
                     <Text style={styles.loadMoreText}>Cargar más (50 más)</Text>
                   </TouchableOpacity>
                 )}
@@ -666,11 +731,18 @@ export default function InventoryScreen({ user }) {
       </ScrollView>
 
       {/* Modal de imagen con zoom */}
-      <Modal visible={modalVisible} transparent={true} animationType="fade" onRequestClose={closeImageModal}>
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeImageModal}
+      >
         <GestureHandlerRootView style={{ flex: 1 }}>
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle} numberOfLines={1}>{selectedMedName}</Text>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {selectedMedName}
+              </Text>
               <View style={styles.modalActions}>
                 <TouchableOpacity onPress={shareImage} style={styles.modalActionBtn}>
                   <Share2 color="white" size={22} />
@@ -682,7 +754,11 @@ export default function InventoryScreen({ user }) {
             </View>
             <GestureDetector gesture={composed}>
               <Animated.View style={[styles.modalImageWrapper, { transform: [{ scale }] }]}>
-                <Image source={{ uri: selectedImage }} style={styles.modalImage} resizeMode="contain" />
+                <Image
+                  source={{ uri: selectedImage }}
+                  style={styles.modalImage}
+                  resizeMode="contain"
+                />
               </Animated.View>
             </GestureDetector>
             <Text style={styles.modalHint}>Pellizca para zoom · Doble toque para resetear</Text>
@@ -697,26 +773,75 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
   loadingText: { marginTop: 10, fontSize: 14, color: '#6B7280' },
-  header: { backgroundColor: 'white', padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
-  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderRadius: 12, paddingHorizontal: 12, marginBottom: 12 },
+  header: {
+    backgroundColor: 'white',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
   searchIcon: { marginRight: 8 },
   searchInput: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#1F2937' },
   headerButtons: { flexDirection: 'row', gap: 8 },
-  filterButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6', padding: 12, borderRadius: 8, gap: 8 },
+  filterButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3F4F6',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
   filterButtonText: { color: '#7C3AED', fontWeight: '600' },
-  inactivosButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6', padding: 12, borderRadius: 8, gap: 8 },
+  inactivosButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3F4F6',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
   inactivosButtonActive: { backgroundColor: '#6B7280' },
   inactivosButtonText: { color: '#6B7280', fontWeight: '600' },
   inactivosButtonTextActive: { color: 'white' },
   filtersContainer: { backgroundColor: 'white', paddingHorizontal: 16, paddingBottom: 12 },
-  filterChip: { paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#F3F4F6', borderRadius: 20, marginRight: 8 },
+  filterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
+    marginRight: 8,
+  },
   filterChipActive: { backgroundColor: '#7C3AED' },
   filterChipText: { color: '#4B5563', fontWeight: '500' },
   filterChipTextActive: { color: 'white' },
   content: { flex: 1, padding: 16 },
-  resultsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  resultsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   resultsText: { fontSize: 14, color: '#6B7280' },
-  pdfButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EDE9FE', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 6 },
+  pdfButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EDE9FE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
   pdfButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 12 },
   emptyContainer: { alignItems: 'center', paddingVertical: 40 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
@@ -735,7 +860,14 @@ const styles = StyleSheet.create({
   medUbicacion: { fontSize: 12, color: '#10B981', marginTop: 4 },
   medUser: { fontSize: 10, color: '#7C3AED', fontStyle: 'italic', marginTop: 4 },
   medImage: { width: 60, height: 60, borderRadius: 8, marginLeft: 12 },
-  zoomHint: { position: 'absolute', bottom: 2, right: 2, backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 6, padding: 2 },
+  zoomHint: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 6,
+    padding: 2,
+  },
   medDetails: { marginBottom: 12 },
   quantityContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   quantityLabel: { fontSize: 14, color: '#6B7280' },
@@ -747,22 +879,76 @@ const styles = StyleSheet.create({
   statusBadge: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   statusText: { fontSize: 12, fontWeight: 'bold' },
   fechaBaja: { fontSize: 11, color: '#9CA3AF', fontStyle: 'italic', marginTop: 4 },
-  actionButtons: { flexDirection: 'row', gap: 8, marginTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB', paddingTop: 8 },
-  deleteButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 8, gap: 6, backgroundColor: '#FEE2E2' },
+  actionButtons: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    paddingTop: 8,
+  },
+  deleteButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    borderRadius: 8,
+    gap: 6,
+    backgroundColor: '#FEE2E2',
+  },
   deleteButtonText: { color: '#DC2626', fontWeight: '600' },
-  reactivarButton: { flex: 1, backgroundColor: '#10B981', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 8 },
+  reactivarButton: {
+    flex: 1,
+    backgroundColor: '#10B981',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    borderRadius: 8,
+  },
   reactivarButtonText: { color: 'white', fontWeight: '600' },
-  loadingMore: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 16, gap: 8 },
+  loadingMore: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+    gap: 8,
+  },
   loadingMoreText: { fontSize: 12, color: '#6B7280' },
-  loadMoreButton: { backgroundColor: '#F3F4F6', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 8 },
+  loadMoreButton: {
+    backgroundColor: '#F3F4F6',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 8,
+  },
   loadMoreText: { color: '#7C3AED', fontWeight: '600' },
-  endOfListText: { textAlign: 'center', color: '#9CA3AF', fontSize: 12, marginTop: 16, marginBottom: 8 },
+  endOfListText: {
+    textAlign: 'center',
+    color: '#9CA3AF',
+    fontSize: 12,
+    marginTop: 16,
+    marginBottom: 8,
+  },
   modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.97)' },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 52, paddingBottom: 12 },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 52,
+    paddingBottom: 12,
+  },
   modalTitle: { color: 'white', fontSize: 16, fontWeight: 'bold', flex: 1, marginRight: 12 },
   modalActions: { flexDirection: 'row', gap: 4 },
   modalActionBtn: { padding: 8 },
   modalImageWrapper: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   modalImage: { width: '100%', height: '100%' },
-  modalHint: { color: 'rgba(255,255,255,0.35)', fontSize: 12, textAlign: 'center', paddingBottom: 24 },
+  modalHint: {
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: 12,
+    textAlign: 'center',
+    paddingBottom: 24,
+  },
 });
