@@ -1,3 +1,7 @@
+para probar con ExpoGo
+npx expo start --tunnel
+luego presionar "s"
+
 Así se compila pues ya el token está en bashrc:
 git add .
 git commit -m "descripción del cambio"
