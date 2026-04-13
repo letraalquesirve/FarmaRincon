@@ -1,5 +1,6 @@
 // src/screens/HomeScreen.js
 import React, { useState, useEffect, useCallback } from 'react';
+import { sendLocalNotification, scheduleDailyNotification } from '../services/NotificationService';
 import {
   View,
   Text,
@@ -74,6 +75,29 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       cargarInactivos(true);
     }
   }, [showInactivos]);
+
+  // Al iniciar, verificar medicamentos por vencer
+  useEffect(() => {
+    verificarVencimientos();
+  }, [medicamentos]);
+
+  const verificarVencimientos = () => {
+    const hoy = new Date();
+    const en30Dias = new Date();
+    en30Dias.setDate(hoy.getDate() + 30);
+
+    const porVencer = medicamentos.filter((m) => {
+      const vence = new Date(m.vencimiento);
+      return vence <= en30Dias && vence >= hoy && m.activo !== false;
+    });
+
+    if (porVencer.length > 0) {
+      sendLocalNotification(
+        '⚠️ Medicamentos por vencer',
+        `${porVencer.length} medicamento(s) vencen en los próximos 30 días`
+      );
+    }
+  };
 
   const cargarInactivos = async (reset = false) => {
     if (cargandoInactivos) return;

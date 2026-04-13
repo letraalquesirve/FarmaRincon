@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { LogBox, View, ActivityIndicator, Platform, Dimensions } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import * as Notifications from 'expo-notifications';
+import { addNotificationListener } from './src/services/NotificationService';
 import {
   Home,
   Package,
@@ -46,23 +48,29 @@ export default function App() {
 
     // Detectar altura de la barra de navegación en Android
     if (Platform.OS === 'android') {
-      // Pequeña demora para asegurar que las dimensiones están listas
       setTimeout(() => {
         const { height: screenHeight } = Dimensions.get('window');
         const { height: screenHeightFull } = Dimensions.get('screen');
         const navigationBarHeight = screenHeightFull - screenHeight;
 
-        console.log('📱 Altura pantalla:', screenHeight);
-        console.log('📱 Altura pantalla completa:', screenHeightFull);
-        console.log('📱 Altura barra navegación:', navigationBarHeight);
-
         if (navigationBarHeight > 0) {
           setBottomInset(navigationBarHeight + 10);
         } else {
-          setBottomInset(32); // Valor por defecto para Pixel 8 Pro
+          setBottomInset(32);
         }
       }, 100);
     }
+
+    // Listener de notificaciones
+    const notificationSubscription = addNotificationListener((response) => {
+      const { data } = response.notification.request.content;
+      console.log('Notificación tocada:', data);
+    });
+
+    // Limpiar al desmontar
+    return () => {
+      notificationSubscription.remove();
+    };
   }, []);
 
   const checkApiKey = async () => {

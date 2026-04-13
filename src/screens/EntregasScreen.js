@@ -299,6 +299,13 @@ export default function EntregasScreen({ user }) {
         for (const item of medicamentosData) {
           const nuevaCantidad = item.stockActual - item.cantidadRequerida;
           transaction.update(item.ref, { cantidad: nuevaCantidad });
+          if (nuevaCantidad <= 10) {
+            // 👈 Verificar stock bajo después de actualizar
+            await sendLocalNotification(
+              '📦 Stock bajo',
+              `${item.nombre} tiene solo ${nuevaCantidad} unidades restantes`
+            );
+          }
         }
       });
 

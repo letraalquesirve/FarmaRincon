@@ -1,67 +1,104 @@
 // src/services/NotificationService.js
-// Versión con SOLO LOGS (no notificaciones reales)
+import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
 
-import { db } from '../../firebaseConfig';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { getDaysUntilExpiry } from '../utils/dateUtils';
+// Configurar cómo se muestran las notificaciones cuando la app está en segundo plano
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
 
-// ============================================================
-// FUNCIÓN PRINCIPAL: VERIFICAR Y REGISTRAR LOGS
-// ============================================================
-export async function checkAndNotifyExpiringMedicines() {
-  try {
-    console.log('🔍 [NOTIFICACIONES DESACTIVADAS] Verificando medicamentos por vencer...');
-    
-    const medicamentosRef = collection(db, 'medicamentos');
-    const q = query(medicamentosRef, where('activo', '==', true));
-    const snapshot = await getDocs(q);
-    
-    const expiringSoon = [];
-    
-    snapshot.forEach(doc => {
-      const med = doc.data();
-      const daysUntilExpiry = getDaysUntilExpiry(med.vencimiento);
-      
-      if (daysUntilExpiry >= 0 && daysUntilExpiry <= 7) {
-        expiringSoon.push({
-          id: doc.id,
-          nombre: med.nombre,
-          presentacion: med.presentacion,
-          ubicacion: med.ubicacion,
-          dias: daysUntilExpiry
-        });
-      }
-    });
-    
-    if (expiringSoon.length === 0) {
-      console.log('✅ No hay medicamentos por vencer');
-      return;
-    }
-    
-    console.log(`⚠️ [SIMULADO] ${expiringSoon.length} medicamentos por vencer encontrados:`);
-    for (const med of expiringSoon) {
-      const message = med.dias === 0
-        ? `⚠️ ${med.nombre} vence HOY${med.ubicacion ? ` en ${med.ubicacion}` : ''}`
-        : `📦 ${med.nombre} vence en ${med.dias} día${med.dias !== 1 ? 's' : ''}${med.ubicacion ? ` (${med.ubicacion})` : ''}`;
-      console.log(`   🔔 ${message}`);
-    }
-    
-  } catch (error) {
-    console.error('Error verificando medicamentos:', error);
+// Solicitar permisos (Android e iOS)
+export async function requestPermissions() {
+  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  let finalStatus = existingStatus;
+
+  if (existingStatus !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
   }
-}
 
-export async function requestNotificationPermissions() {
-  console.log('✅ [SIMULADO] Permiso de notificaciones concedido (simulado)');
+  if (finalStatus !== 'granted') {
+    console.log('Permiso de notificaciones no concedido');
+    return false;
+  }
+
   return true;
 }
 
-export async function initializeNotifications() {
-  console.log('📱 [SIMULADO] Inicializando notificaciones (solo logs)');
-  await checkAndNotifyExpiringMedicines();
+// Enviar notificación local inmediata
+export async function sendLocalNotification(title, body, data = {}) {
+  const hasPermission = await requestPermissions();
+  if (!hasPermission) return;
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title,
+      body,
+      data,
+      sound: 'default',
+    },
+    trigger: null, // null = inmediato
+  });
 }
 
-export async function forceCheckNotifications() {
-  console.log('🔄 [SIMULADO] Forzando verificación manual...');
-  await checkAndNotifyExpiringMedicines();
+// Programar notificación para una fecha específica
+export async function scheduleNotification(title, body, triggerDate, data = {}) {
+  const hasPermission = await requestPermissions();
+  if (!hasPermission) return;
+
+  // Convertir fecha a timestamp si es necesario
+  const trigger = {
+    date: new Date(triggerDate),
+  };
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title,
+      body,
+      data,
+      sound: 'default',
+    },
+    trigger,
+  });
+}
+
+// Programar notificación recurrente (ej: cada día)
+export async function scheduleDailyNotification(title, body, hour, minute, data = {}) {
+  const hasPermission = await requestPermissions();
+  if (!hasPermission) return;
+
+  const trigger = {
+    hour,
+    minute,
+    repeats: true,
+  };
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title,
+      body,
+      data,
+      sound: 'default',
+    },
+    trigger,
+  });
+}
+
+// Cancelar todas las notificaciones programadas
+export async function cancelAllNotifications() {
+  await Notifications.cancelAllScheduledNotificationsAsync();
+}
+
+// Obtener todas las notificaciones programadas
+export async function getAllScheduledNotifications() {
+  return await Notifications.getAllScheduledNotificationsAsync();
+}
+
+// Configurar listener para cuando el usuario toca una notificación
+export function addNotificationListener(callback) {
+  return Notifications.addNotificationResponseReceivedListener(callback);
 }

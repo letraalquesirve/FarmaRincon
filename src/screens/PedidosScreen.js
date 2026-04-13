@@ -1,5 +1,6 @@
 // src/screens/PedidosScreen.js
 import React, { useState, useEffect } from 'react';
+import { sendLocalNotification } from '../services/NotificationService';
 import {
   View,
   Text,
@@ -219,6 +220,11 @@ export default function PedidosScreen({ user }) {
         fechaAtencion: null,
         creadoPor: getUserName(),
       });
+
+      await sendLocalNotification(
+        '📋 Nuevo Pedido',
+        `${formData.nombreSolicitante} ha solicitado ${formData.medicamentosSolicitados.length} medicamento(s)`
+      );
 
       setFormData({
         nombreSolicitante: '',
