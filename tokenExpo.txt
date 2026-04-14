@@ -4,9 +4,12 @@ luego presionar "s"
 
 Así se compila pues ya el token está en bashrc:
 git add .
-git commit -m "descripción del cambio"
+git commit -m "implementando notificaciones"
 git push
 npx eas-cli@latest build -p android --profile preview --no-wait
+
+export EXPO_TOKEN="VC4AW_AxhFILpW8LgXtkMV0j9PzLS-L9xBsxWPSJ" && eas build --platform android --profile development
+
 
 Gemini APIKey: AIzaSyBe7NNnIODkRKhSUnmvELd1Jl0Rvw_iWaA
 
