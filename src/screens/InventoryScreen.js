@@ -14,9 +14,9 @@ import {
   Animated,
   RefreshControl,
   ActivityIndicator,
+  KeyboardAvoidingView,
 } from 'react-native';
 import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
 import { db } from '../../firebaseConfig';
 import {
   collection,
@@ -25,6 +25,7 @@ import {
   orderBy,
   doc,
   updateDoc,
+  addDoc,
   where,
   limit,
   startAfter,
@@ -40,11 +41,19 @@ import {
   ZoomIn,
   Share2,
   FileText,
+  Edit,
+  Copy,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { isAdmin } from '../services/AuthService';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import DatePickerInput from '../components/DatePickerInput';
+import CategoriaPicker from '../components/CategoriaPicker';
+//import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 
+// ── Utilidades ───────────────────────────────────────────────
 const normalizeText = (text) => {
   if (!text) return '';
   return text
@@ -52,6 +61,16 @@ const normalizeText = (text) => {
     .trim()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+};
+
+const escapeHtml = (text) => {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 };
 
 export default function InventoryScreen({ user }) {
@@ -66,28 +85,52 @@ export default function InventoryScreen({ user }) {
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Estados para paginación de inactivos
+  // Estados para modales de Editar y Duplicar
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [duplicateModalVisible, setDuplicateModalVisible] = useState(false);
+  const [currentEditMed, setCurrentEditMed] = useState(null);
+  const [currentDuplicateMed, setCurrentDuplicateMed] = useState(null);
+  const [editForm, setEditForm] = useState({
+    nombre: '',
+    presentacion: '',
+    categoria: '',
+    cantidad: '',
+    vencimiento: '',
+    ubicacion: '',
+  });
+  const [duplicateForm, setDuplicateForm] = useState({
+    nombre: '',
+    presentacion: '',
+    categoria: '',
+    ubicacion: '',
+    cantidad: '',
+    vencimiento: '',
+  });
+
+  // Paginación de inactivos
   const [inactivosVisibles, setInactivosVisibles] = useState([]);
   const [ultimoDocInactivos, setUltimoDocInactivos] = useState(null);
   const [cargandoInactivos, setCargandoInactivos] = useState(false);
   const [hayMasInactivos, setHayMasInactivos] = useState(true);
   const [cargandoInicial, setCargandoInicial] = useState(true);
 
+  // ── Zoom con gesture-handler ─────────────────────────────
   const scale = useRef(new Animated.Value(1)).current;
   const savedScale = useRef(1);
 
   const pinchGesture = Gesture.Pinch()
+    .runOnJS(true)
     .onUpdate((e) => {
-      scale.setValue(savedScale.current * e.scale);
+      const newScale = Math.max(0.5, Math.min(savedScale.current * e.scale, 5));
+      scale.setValue(newScale);
     })
     .onEnd((e) => {
-      savedScale.current = savedScale.current * e.scale;
-      if (savedScale.current < 0.5) savedScale.current = 0.5;
-      if (savedScale.current > 5) savedScale.current = 5;
+      savedScale.current = Math.max(0.5, Math.min(savedScale.current * e.scale, 5));
       scale.setValue(savedScale.current);
     });
 
   const doubleTap = Gesture.Tap()
+    .runOnJS(true)
     .numberOfTaps(2)
     .onEnd(() => {
       savedScale.current = 1;
@@ -101,7 +144,7 @@ export default function InventoryScreen({ user }) {
     scale.setValue(1);
   };
 
-  // Cargar medicamentos activos (sin paginación, son pocos)
+  // Cargar activos en tiempo real
   useEffect(() => {
     const q = query(
       collection(db, 'medicamentos'),
@@ -118,12 +161,11 @@ export default function InventoryScreen({ user }) {
     return () => unsubscribe();
   }, []);
 
-  // Cargar inactivos con paginación cuando se activa el toggle
+  // Cargar inactivos con paginación
   useEffect(() => {
     if (showInactivos) {
       cargarInactivos(true);
     } else {
-      // Limpiar cuando se cierra
       setInactivosVisibles([]);
       setUltimoDocInactivos(null);
       setHayMasInactivos(true);
@@ -133,7 +175,6 @@ export default function InventoryScreen({ user }) {
   const cargarInactivos = async (reset = false) => {
     if (cargandoInactivos) return;
     if (!reset && !hayMasInactivos) return;
-
     setCargandoInactivos(true);
     try {
       let q;
@@ -141,26 +182,22 @@ export default function InventoryScreen({ user }) {
         q = query(
           collection(db, 'medicamentos'),
           where('activo', '==', false),
-          orderBy('nombre', 'asc')
+          orderBy('nombre', 'asc'),
+          limit(50)
         );
       } else {
         q = query(
           collection(db, 'medicamentos'),
           where('activo', '==', false),
           orderBy('nombre', 'asc'),
+          limit(50),
           startAfter(ultimoDocInactivos)
         );
       }
-
       const snapshot = await getDocs(q);
-      const nuevosInactivos = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-
-      if (reset) {
-        setInactivosVisibles(nuevosInactivos);
-      } else {
-        setInactivosVisibles((prev) => [...prev, ...nuevosInactivos]);
-      }
-
+      const nuevos = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (reset) setInactivosVisibles(nuevos);
+      else setInactivosVisibles((prev) => [...prev, ...nuevos]);
       setUltimoDocInactivos(snapshot.docs[snapshot.docs.length - 1]);
       setHayMasInactivos(snapshot.docs.length === 50);
     } catch (error) {
@@ -173,14 +210,12 @@ export default function InventoryScreen({ user }) {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    if (showInactivos) {
-      cargarInactivos(true);
-    }
+    if (showInactivos) cargarInactivos(true);
   }, [showInactivos]);
 
+  // ── Filtros ──────────────────────────────────────────────
   const getFilteredMeds = () => {
     let filtered = [...medicamentosActivos];
-
     if (searchTerm) {
       const searchNorm = normalizeText(searchTerm);
       filtered = filtered.filter(
@@ -191,7 +226,6 @@ export default function InventoryScreen({ user }) {
           normalizeText(m.ubicacion || '').includes(searchNorm)
       );
     }
-
     switch (filter) {
       case 'vigentes':
         filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
@@ -210,9 +244,7 @@ export default function InventoryScreen({ user }) {
   };
 
   const getFilteredInactivos = () => {
-    if (!searchTerm.trim()) {
-      return inactivosVisibles;
-    }
+    if (!searchTerm.trim()) return inactivosVisibles;
     const searchNorm = normalizeText(searchTerm);
     return inactivosVisibles.filter(
       (m) =>
@@ -224,9 +256,7 @@ export default function InventoryScreen({ user }) {
   };
 
   const getFilterTitle = () => {
-    if (showInactivos) {
-      return 'LISTADO DE MEDICAMENTOS INACTIVOS';
-    }
+    if (showInactivos) return 'LISTADO DE MEDICAMENTOS INACTIVOS';
     switch (filter) {
       case 'vigentes':
         return 'LISTADO DE MEDICAMENTOS VIGENTES';
@@ -239,27 +269,126 @@ export default function InventoryScreen({ user }) {
     }
   };
 
-  const generatePDF = async () => {
-    let medicamentosParaPDF;
-    let titulo = getFilterTitle();
+  const getUserName = () => {
+    return user?.nombre || user?.email?.split('@')[0] || 'usuario';
+  };
 
-    if (showInactivos) {
-      // Para inactivos, usar los filtrados por búsqueda
-      medicamentosParaPDF = getFilteredInactivos();
-      titulo = searchTerm
-        ? `LISTADO DE MEDICAMENTOS INACTIVOS - BÚSQUEDA: "${searchTerm}"`
-        : 'LISTADO DE MEDICAMENTOS INACTIVOS';
-    } else {
-      medicamentosParaPDF = getFilteredMeds();
+  // ── EDITAR MEDICAMENTO ────────────────────────────────────
+  const openEditModal = (med) => {
+    setCurrentEditMed(med);
+    setEditForm({
+      nombre: med.nombre || '',
+      presentacion: med.presentacion || '',
+      categoria: med.categoria || '',
+      cantidad: med.cantidad ? med.cantidad.toString() : '',
+      vencimiento: med.vencimiento || '',
+      ubicacion: med.ubicacion || '',
+    });
+    setEditModalVisible(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editForm.nombre.trim()) {
+      Alert.alert('Error', 'El nombre es obligatorio');
+      return;
     }
+    if (!editForm.cantidad || parseInt(editForm.cantidad) <= 0) {
+      Alert.alert('Error', 'Ingresa una cantidad válida');
+      return;
+    }
+    if (!editForm.vencimiento) {
+      Alert.alert('Error', 'La fecha de vencimiento es obligatoria');
+      return;
+    }
+
+    try {
+      const medRef = doc(db, 'medicamentos', currentEditMed.id);
+      await updateDoc(medRef, {
+        nombre: editForm.nombre.trim(),
+        presentacion: editForm.presentacion.trim() || 'No especificada',
+        categoria: editForm.categoria.trim() || 'Sin categoría',
+        cantidad: parseInt(editForm.cantidad),
+        vencimiento: editForm.vencimiento,
+        ubicacion: editForm.ubicacion.trim() || '',
+        fechaEdicion: new Date().toISOString(),
+        editadoPor: getUserName(),
+      });
+      Alert.alert('Éxito', 'Medicamento actualizado correctamente');
+      setEditModalVisible(false);
+      setCurrentEditMed(null);
+    } catch (error) {
+      console.error('Error editando:', error);
+      Alert.alert('Error', 'No se pudo actualizar el medicamento');
+    }
+  };
+
+  // ── DUPLICAR MEDICAMENTO ──────────────────────────────────
+  const openDuplicateModal = (med) => {
+    setCurrentDuplicateMed(med);
+    setDuplicateForm({
+      nombre: med.nombre || '',
+      presentacion: med.presentacion || '',
+      categoria: med.categoria || '',
+      ubicacion: med.ubicacion || '',
+      cantidad: '',
+      vencimiento: '',
+    });
+    setDuplicateModalVisible(true);
+  };
+
+  const handleSaveDuplicate = async () => {
+    if (!duplicateForm.nombre.trim()) {
+      Alert.alert('Error', 'El nombre es obligatorio');
+      return;
+    }
+    if (!duplicateForm.cantidad || parseInt(duplicateForm.cantidad) <= 0) {
+      Alert.alert('Error', 'Ingresa una cantidad válida');
+      return;
+    }
+    if (!duplicateForm.vencimiento) {
+      Alert.alert('Error', 'La fecha de vencimiento es obligatoria');
+      return;
+    }
+
+    try {
+      const newMedData = {
+        nombre: duplicateForm.nombre.trim(),
+        presentacion: duplicateForm.presentacion.trim() || 'No especificada',
+        categoria: duplicateForm.categoria.trim() || 'Sin categoría',
+        cantidad: parseInt(duplicateForm.cantidad),
+        vencimiento: duplicateForm.vencimiento,
+        ubicacion: duplicateForm.ubicacion.trim() || '',
+        imagen: currentDuplicateMed.imagen || null,
+        activo: true,
+        fechaRegistro: new Date().toISOString(),
+        userName: getUserName(),
+        userId: getUserName(),
+        esDuplicado: true,
+        duplicadoDe: currentDuplicateMed.id,
+      };
+      await addDoc(collection(db, 'medicamentos'), newMedData);
+      Alert.alert('Éxito', 'Medicamento duplicado correctamente');
+      setDuplicateModalVisible(false);
+      setCurrentDuplicateMed(null);
+    } catch (error) {
+      console.error('Error duplicando:', error);
+      Alert.alert('Error', 'No se pudo duplicar el medicamento');
+    }
+  };
+
+  // ── PDF ──────────────────────────────────────────────────
+  const generatePDF = async () => {
+    const medicamentosParaPDF = showInactivos ? getFilteredInactivos() : getFilteredMeds();
+    const titulo =
+      showInactivos && searchTerm
+        ? `LISTADO DE MEDICAMENTOS INACTIVOS - BÚSQUEDA: "${searchTerm}"`
+        : getFilterTitle();
 
     if (medicamentosParaPDF.length === 0) {
       Alert.alert('Sin datos', 'No hay medicamentos para generar el PDF');
       return;
     }
-
     setGeneratingPDF(true);
-
     try {
       const today = new Date().toLocaleDateString('es-ES', {
         day: '2-digit',
@@ -268,7 +397,6 @@ export default function InventoryScreen({ user }) {
         hour: '2-digit',
         minute: '2-digit',
       });
-
       let tableRows = '';
       medicamentosParaPDF.forEach((med, index) => {
         const status =
@@ -279,67 +407,36 @@ export default function InventoryScreen({ user }) {
               : getDaysUntilExpiry(med.vencimiento) <= 30
                 ? 'POR VENCER'
                 : 'VIGENTE';
-
         tableRows += `
           <tr style="background-color: ${index % 2 === 0 ? '#f9fafb' : 'white'}">
-            <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${index + 1}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(med.nombre || '')}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(med.presentacion || '')}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(med.categoria || '')}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${med.cantidad || 0}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${new Date(med.vencimiento).toLocaleDateString()}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(med.ubicacion || '')}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; font-weight: bold;">${status}</td>
-          </tr>
-      `;
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:center;">${index + 1}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${escapeHtml(med.nombre || '')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${escapeHtml(med.presentacion || '')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${escapeHtml(med.categoria || '')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;text-align:center;">${med.cantidad || 0}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${new Date(med.vencimiento).toLocaleDateString()}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${escapeHtml(med.ubicacion || '')}</td>
+            <td style="padding:10px;border-bottom:1px solid #e5e7eb;font-weight:bold;">${status}</td>
+          </tr>`;
       });
-
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="utf-8">
-            <title>${titulo}</title>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body { font-family: 'Helvetica', 'Arial', sans-serif; padding: 20px; background-color: white; }
-              .header { text-align: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #7C3AED; }
-              .title { font-size: 20px; font-weight: bold; color: #1F2937; margin-bottom: 5px; }
-              .subtitle { font-size: 12px; color: #6B7280; }
-              .stats { margin-bottom: 15px; padding: 10px; background-color: #F3F4F6; border-radius: 8px; text-align: center; }
-              .stats-text { font-size: 12px; color: #374151; }
-              table { width: 100%; border-collapse: collapse; font-size: 11px; }
-              th { background-color: #7C3AED; color: white; padding: 10px; text-align: left; font-weight: bold; }
-              td { padding: 8px; border-bottom: 1px solid #E5E7EB; }
-              .footer { margin-top: 20px; padding-top: 10px; text-align: center; font-size: 10px; color: #9CA3AF; border-top: 1px solid #E5E7EB; }
-              @media print {
-                body { padding: 10px; }
-                th { background-color: #7C3AED; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="header">
-              <div class="title">${titulo}</div>
-              <div class="subtitle">Generado: ${today}</div>
-            </div>
-            <div class="stats">
-              <div class="stats-text">Total de medicamentos: ${medicamentosParaPDF.length}</div>
-            </div>
-            <table>
-              <thead>
-                <tr><th>#</th><th>Nombre</th><th>Presentación</th><th>Categoría</th><th>Stock</th><th>Vencimiento</th><th>Ubicación</th><th>Estado</th></tr>
-              </thead>
-              <tbody>${tableRows}</tbody>
-            </table>
-            <div class="footer">
-              <div>Farmacia Iglesia - Sistema de Gestión de Inventario</div>
-              <div>Reporte generado automáticamente</div>
-            </div>
-          </body>
-        </html>
-      `;
-
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${titulo}</title>
+        <style>
+          *{margin:0;padding:0;box-sizing:border-box}
+          body{font-family:'Helvetica','Arial',sans-serif;padding:20px;background:white}
+          .header{text-align:center;margin-bottom:20px;padding-bottom:15px;border-bottom:2px solid #7C3AED}
+          .title{font-size:20px;font-weight:bold;color:#1F2937;margin-bottom:5px}
+          .subtitle{font-size:12px;color:#6B7280}
+          .stats{margin-bottom:15px;padding:10px;background:#F3F4F6;border-radius:8px;text-align:center}
+          table{width:100%;border-collapse:collapse;font-size:11px}
+          th{background:#7C3AED;color:white;padding:10px;text-align:left;font-weight:bold}
+          .footer{margin-top:20px;padding-top:10px;text-align:center;font-size:10px;color:#9CA3AF;border-top:1px solid #E5E7EB}
+        </style></head><body>
+        <div class="header"><div class="title">${titulo}</div><div class="subtitle">Generado: ${today}</div></div>
+        <div class="stats"><div class="stats-text">Total: ${medicamentosParaPDF.length} medicamentos</div></div>
+        <table><thead><tr><th>#</th><th>Nombre</th><th>Presentación</th><th>Categoría</th><th>Stock</th><th>Vencimiento</th><th>Ubicación</th><th>Estado</th></tr></thead>
+        <tbody>${tableRows}</tbody></table>
+        <div class="footer"><div>Farmacia Iglesia - Sistema de Gestión de Inventario</div></div>
+        </body></html>`;
       const { uri } = await Print.printToFileAsync({ html });
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
@@ -357,16 +454,7 @@ export default function InventoryScreen({ user }) {
     }
   };
 
-  const escapeHtml = (text) => {
-    if (!text) return '';
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  };
-
+  // ── Acciones de medicamentos ─────────────────────────────
   const handleSoftDelete = async (medId, medName) => {
     Alert.alert(
       'Desactivar Medicamento',
@@ -409,11 +497,12 @@ export default function InventoryScreen({ user }) {
     ]);
   };
 
-  const openImageModal = (imageUri, medName) => {
-    if (!imageUri) return;
+  // ── Modal de imagen ──────────────────────────────────────
+  const openImageModal = (imageBase64, medName) => {
+    if (!imageBase64) return;
     resetZoom();
-    const fullUri = `data:image/jpeg;base64,${imageUri}`;
-    setSelectedImage(fullUri);
+    const clean = imageBase64.includes('base64,') ? imageBase64.split('base64,')[1] : imageBase64;
+    setSelectedImage(clean);
     setSelectedMedName(medName);
     setModalVisible(true);
   };
@@ -423,18 +512,31 @@ export default function InventoryScreen({ user }) {
     setModalVisible(false);
   };
 
+  // ── Compartir imagen ─────────────────────────────────────
   const shareImage = async () => {
     if (!selectedImage) return;
     try {
-      await Share.share({
-        url: selectedImage,
-        message: `Imagen de ${selectedMedName}`,
+      const filename = `${FileSystem.cacheDirectory}med_${Date.now()}.jpg`;
+      await FileSystem.writeAsStringAsync(filename, selectedImage, {
+        encoding: 'base64',
       });
-    } catch (e) {
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (isAvailable) {
+        await Sharing.shareAsync(filename, {
+          mimeType: 'image/jpeg',
+          dialogTitle: `Imagen de ${selectedMedName}`,
+          UTI: 'public.jpeg',
+        });
+      } else {
+        Alert.alert('No disponible', 'Tu dispositivo no soporta compartir archivos.');
+      }
+    } catch (error) {
+      console.error('Error compartiendo imagen:', error);
       Alert.alert('Error', 'No se pudo compartir la imagen');
     }
   };
 
+  // ── Status helpers ───────────────────────────────────────
   const getStatusColor = (fecha) => {
     const days = getDaysUntilExpiry(fecha);
     if (days < 0) return styles.vencido;
@@ -461,8 +563,100 @@ export default function InventoryScreen({ user }) {
     );
   }
 
+  // ── Componente de tarjeta de medicamento ─────────────────
+  const MedCard = ({ med, isInactivo = false }) => (
+    <View
+      key={med.id}
+      style={[styles.card, isInactivo ? styles.cardInactivo : getStatusColor(med.vencimiento)]}
+    >
+      <View style={styles.cardContent}>
+        <View style={styles.cardHeader}>
+          <View style={styles.medInfo}>
+            <Text style={styles.medName}>{med.nombre}</Text>
+            <Text style={styles.medPresentation}>{med.presentacion}</Text>
+            <Text style={styles.medCategory}>📋 {med.categoria}</Text>
+            {med.ubicacion && <Text style={styles.medUbicacion}>📍 {med.ubicacion}</Text>}
+            {med.userName && <Text style={styles.medUser}>👤 Registrado por: {med.userName}</Text>}
+          </View>
+          {med.imagen && (
+            <TouchableOpacity onPress={() => openImageModal(med.imagen, med.nombre)}>
+              <Image
+                source={{
+                  uri: `data:image/jpeg;base64,${med.imagen.includes('base64,') ? med.imagen.split('base64,')[1] : med.imagen}`,
+                }}
+                style={styles.medImage}
+              />
+              <View style={styles.zoomHint}>
+                <ZoomIn color="white" size={12} />
+              </View>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={styles.medDetails}>
+          <View style={styles.quantityContainer}>
+            <Text style={styles.quantityLabel}>Cantidad:</Text>
+            <Text style={styles.quantityValue}>{med.cantidad} uds</Text>
+          </View>
+          <View style={styles.expiryContainer}>
+            <Text style={styles.expiryLabel}>Vencimiento:</Text>
+            <Text style={styles.expiryValue}>{new Date(med.vencimiento).toLocaleDateString()}</Text>
+          </View>
+          {!isInactivo && (
+            <View style={styles.statusContainer}>
+              <View style={[styles.statusBadge, getStatusColor(med.vencimiento)]}>
+                <Text style={styles.statusText}>{getStatusText(med.vencimiento)}</Text>
+              </View>
+            </View>
+          )}
+          {med.fechaBaja && (
+            <Text style={styles.fechaBaja}>
+              Dado de baja: {new Date(med.fechaBaja).toLocaleDateString()}
+            </Text>
+          )}
+        </View>
+
+        <View style={styles.actionButtons}>
+          {!isInactivo && (
+            <>
+              <TouchableOpacity style={styles.editButton} onPress={() => openEditModal(med)}>
+                <Edit color="#7C3AED" size={16} />
+                <Text style={styles.editButtonText}>Editar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.duplicateButton}
+                onPress={() => openDuplicateModal(med)}
+              >
+                <Copy color="#7C3AED" size={16} />
+                <Text style={styles.duplicateButtonText}>Duplicar</Text>
+              </TouchableOpacity>
+            </>
+          )}
+          {isInactivo ? (
+            <TouchableOpacity
+              style={styles.reactivarButton}
+              onPress={() => handleReactivar(med.id, med.nombre)}
+            >
+              <Text style={styles.reactivarButtonText}>Reactivar</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={() => handleSoftDelete(med.id, med.nombre)}
+            >
+              <Trash color="#DC2626" size={18} />
+              <Text style={styles.deleteButtonText}>Desactivar</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    </View>
+  );
+
+  // ── Render ───────────────────────────────────────────────
   return (
     <View style={styles.container}>
+      {/* Header con búsqueda */}
       <View style={styles.header}>
         <View style={styles.searchContainer}>
           <Search color="#9CA3AF" size={20} style={styles.searchIcon} />
@@ -479,7 +673,6 @@ export default function InventoryScreen({ user }) {
             </TouchableOpacity>
           )}
         </View>
-
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={styles.filterButton}
@@ -505,6 +698,7 @@ export default function InventoryScreen({ user }) {
         </View>
       </View>
 
+      {/* Chips de filtro */}
       {showFilters && !showInactivos && (
         <View style={styles.filtersContainer}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -530,10 +724,12 @@ export default function InventoryScreen({ user }) {
         </View>
       )}
 
+      {/* Lista */}
       <ScrollView
         style={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
+        {/* Activos */}
         {!showInactivos && filteredMeds.length === 0 && (
           <View style={styles.emptyContainer}>
             <Package color="#D1D5DB" size={64} />
@@ -556,70 +752,16 @@ export default function InventoryScreen({ user }) {
                 disabled={generatingPDF}
               >
                 <FileText color="#7C3AED" size={18} />
-                <Text style={styles.pdfButtonText}>PDF</Text>
+                <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
               </TouchableOpacity>
             </View>
-
             {filteredMeds.map((med) => (
-              <View key={med.id} style={[styles.card, getStatusColor(med.vencimiento)]}>
-                <View style={styles.cardContent}>
-                  <View style={styles.cardHeader}>
-                    <View style={styles.medInfo}>
-                      <Text style={styles.medName}>{med.nombre}</Text>
-                      <Text style={styles.medPresentation}>{med.presentacion}</Text>
-                      <Text style={styles.medCategory}>📋 {med.categoria}</Text>
-                      {med.ubicacion && <Text style={styles.medUbicacion}>📍 {med.ubicacion}</Text>}
-                      {med.userName && (
-                        <Text style={styles.medUser}>👤 Registrado por: {med.userName}</Text>
-                      )}
-                    </View>
-                    {med.imagen && (
-                      <TouchableOpacity onPress={() => openImageModal(med.imagen, med.nombre)}>
-                        <Image
-                          source={{ uri: `data:image/jpeg;base64,${med.imagen}` }}
-                          style={styles.medImage}
-                        />
-                        <View style={styles.zoomHint}>
-                          <ZoomIn color="white" size={12} />
-                        </View>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  <View style={styles.medDetails}>
-                    <View style={styles.quantityContainer}>
-                      <Text style={styles.quantityLabel}>Cantidad:</Text>
-                      <Text style={styles.quantityValue}>{med.cantidad} uds</Text>
-                    </View>
-                    <View style={styles.expiryContainer}>
-                      <Text style={styles.expiryLabel}>Vencimiento:</Text>
-                      <Text style={styles.expiryValue}>
-                        {new Date(med.vencimiento).toLocaleDateString()}
-                      </Text>
-                    </View>
-                    <View style={styles.statusContainer}>
-                      <View style={[styles.statusBadge, getStatusColor(med.vencimiento)]}>
-                        <Text style={styles.statusText}>{getStatusText(med.vencimiento)}</Text>
-                      </View>
-                    </View>
-                  </View>
-
-                  <View style={styles.actionButtons}>
-                    <TouchableOpacity
-                      style={styles.deleteButton}
-                      onPress={() => handleSoftDelete(med.id, med.nombre)}
-                    >
-                      <Trash color="#DC2626" size={18} />
-                      <Text style={styles.deleteButtonText}>Desactivar</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
+              <MedCard key={med.id} med={med} />
             ))}
           </>
         )}
 
-        {/* Sección de inactivos con paginación y búsqueda */}
+        {/* Inactivos */}
         {showInactivos && (
           <>
             <View style={styles.resultsHeader}>
@@ -633,7 +775,7 @@ export default function InventoryScreen({ user }) {
                 disabled={generatingPDF}
               >
                 <FileText color="#7C3AED" size={18} />
-                <Text style={styles.pdfButtonText}>PDF</Text>
+                <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
               </TouchableOpacity>
             </View>
 
@@ -644,63 +786,7 @@ export default function InventoryScreen({ user }) {
                 <Text style={styles.emptyText}>No se encontraron inactivos con "{searchTerm}"</Text>
               </View>
             ) : (
-              getFilteredInactivos().map((med) => (
-                <View key={med.id} style={[styles.card, styles.cardInactivo]}>
-                  <View style={styles.cardContent}>
-                    <View style={styles.cardHeader}>
-                      <View style={styles.medInfo}>
-                        <Text style={styles.medName}>{med.nombre}</Text>
-                        <Text style={styles.medPresentation}>{med.presentacion}</Text>
-                        <Text style={styles.medCategory}>📋 {med.categoria}</Text>
-                        {med.ubicacion && (
-                          <Text style={styles.medUbicacion}>📍 {med.ubicacion}</Text>
-                        )}
-                        {med.userName && (
-                          <Text style={styles.medUser}>👤 Registrado por: {med.userName}</Text>
-                        )}
-                      </View>
-                      {med.imagen && (
-                        <TouchableOpacity onPress={() => openImageModal(med.imagen, med.nombre)}>
-                          <Image
-                            source={{ uri: `data:image/jpeg;base64,${med.imagen}` }}
-                            style={styles.medImage}
-                          />
-                          <View style={styles.zoomHint}>
-                            <ZoomIn color="white" size={12} />
-                          </View>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    <View style={styles.medDetails}>
-                      <View style={styles.quantityContainer}>
-                        <Text style={styles.quantityLabel}>Cantidad:</Text>
-                        <Text style={styles.quantityValue}>{med.cantidad} uds</Text>
-                      </View>
-                      <View style={styles.expiryContainer}>
-                        <Text style={styles.expiryLabel}>Vencimiento:</Text>
-                        <Text style={styles.expiryValue}>
-                          {new Date(med.vencimiento).toLocaleDateString()}
-                        </Text>
-                      </View>
-                      {med.fechaBaja && (
-                        <Text style={styles.fechaBaja}>
-                          Dado de baja: {new Date(med.fechaBaja).toLocaleDateString()}
-                        </Text>
-                      )}
-                    </View>
-
-                    <View style={styles.actionButtons}>
-                      <TouchableOpacity
-                        style={styles.reactivarButton}
-                        onPress={() => handleReactivar(med.id, med.nombre)}
-                      >
-                        <Text style={styles.reactivarButtonText}>Reactivar</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </View>
-              ))
+              getFilteredInactivos().map((med) => <MedCard key={med.id} med={med} isInactivo />)
             )}
 
             {!searchTerm && (
@@ -711,7 +797,6 @@ export default function InventoryScreen({ user }) {
                     <Text style={styles.loadingMoreText}>Cargando más...</Text>
                   </View>
                 )}
-
                 {!cargandoInactivos && hayMasInactivos && (
                   <TouchableOpacity
                     style={styles.loadMoreButton}
@@ -720,7 +805,6 @@ export default function InventoryScreen({ user }) {
                     <Text style={styles.loadMoreText}>Cargar más (50 más)</Text>
                   </TouchableOpacity>
                 )}
-
                 {!cargandoInactivos && !hayMasInactivos && inactivosVisibles.length > 0 && (
                   <Text style={styles.endOfListText}>✓ Todos los inactivos cargados</Text>
                 )}
@@ -752,18 +836,197 @@ export default function InventoryScreen({ user }) {
                 </TouchableOpacity>
               </View>
             </View>
+
             <GestureDetector gesture={composed}>
               <Animated.View style={[styles.modalImageWrapper, { transform: [{ scale }] }]}>
-                <Image
-                  source={{ uri: selectedImage }}
-                  style={styles.modalImage}
-                  resizeMode="contain"
-                />
+                {selectedImage && (
+                  <Image
+                    source={{ uri: `data:image/jpeg;base64,${selectedImage}` }}
+                    style={styles.modalImage}
+                    resizeMode="contain"
+                    onError={() => Alert.alert('Error', 'No se pudo cargar la imagen')}
+                  />
+                )}
               </Animated.View>
             </GestureDetector>
+
             <Text style={styles.modalHint}>Pellizca para zoom · Doble toque para resetear</Text>
           </View>
         </GestureHandlerRootView>
+      </Modal>
+
+      {/* Modal de Editar */}
+      <Modal
+        visible={editModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setEditModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior="padding"
+            style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+          >
+            <ScrollView
+              style={styles.modalContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Editar Medicamento</Text>
+                <TouchableOpacity onPress={() => setEditModalVisible(false)}>
+                  <X color="#6B7280" size={24} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.modalBody}>
+                <Text style={styles.label}>Nombre *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={editForm.nombre}
+                  onChangeText={(t) => setEditForm({ ...editForm, nombre: t })}
+                  placeholder="Nombre del medicamento"
+                  placeholderTextColor="#9CA3AF"
+                />
+                <Text style={styles.label}>Presentación</Text>
+                <TextInput
+                  style={styles.input}
+                  value={editForm.presentacion}
+                  onChangeText={(t) => setEditForm({ ...editForm, presentacion: t })}
+                  placeholder="Ej: Tabletas 500mg"
+                  placeholderTextColor="#9CA3AF"
+                />
+                <Text style={styles.label}>Categoría</Text>
+                <CategoriaPicker
+                  value={editForm.categoria}
+                  onChange={(text) => setEditForm({ ...editForm, categoria: text })}
+                  placeholder="Seleccionar categoría"
+                  showLabel={false}
+                />
+                <View style={styles.row}>
+                  <View style={[styles.inputGroup, { flex: 1, marginRight: 10 }]}>
+                    <Text style={styles.label}>Cantidad *</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={editForm.cantidad}
+                      onChangeText={(t) => setEditForm({ ...editForm, cantidad: t })}
+                      placeholder="Ej: 50"
+                      placeholderTextColor="#9CA3AF"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={[styles.inputGroup, { flex: 1 }]}>
+                    <Text style={styles.label}>Vencimiento *</Text>
+                    <DatePickerInput
+                      label=""
+                      value={editForm.vencimiento}
+                      onChange={(date) => setEditForm({ ...editForm, vencimiento: date })}
+                      placeholder="Seleccionar fecha"
+                      required={true}
+                    />
+                  </View>
+                </View>
+                <Text style={styles.label}>Ubicación</Text>
+                <TextInput
+                  style={styles.input}
+                  value={editForm.ubicacion}
+                  onChangeText={(t) => setEditForm({ ...editForm, ubicacion: t })}
+                  placeholder="Ej: Estante A3"
+                  placeholderTextColor="#9CA3AF"
+                />
+                <TouchableOpacity style={styles.saveButton} onPress={handleSaveEdit}>
+                  <Text style={styles.saveButtonText}>Guardar Cambios</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Modal de Duplicar */}
+      <Modal
+        visible={duplicateModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setDuplicateModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior="padding"
+            style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+          >
+            <ScrollView
+              style={styles.modalContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Duplicar Medicamento</Text>
+                <TouchableOpacity onPress={() => setDuplicateModalVisible(false)}>
+                  <X color="#6B7280" size={24} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.modalBody}>
+                <Text style={styles.label}>Nombre *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={duplicateForm.nombre}
+                  onChangeText={(t) => setDuplicateForm({ ...duplicateForm, nombre: t })}
+                  placeholder="Nombre del medicamento"
+                  placeholderTextColor="#9CA3AF"
+                />
+                <Text style={styles.label}>Presentación</Text>
+                <TextInput
+                  style={styles.input}
+                  value={duplicateForm.presentacion}
+                  onChangeText={(t) => setDuplicateForm({ ...duplicateForm, presentacion: t })}
+                  placeholder="Ej: Tabletas 500mg"
+                  placeholderTextColor="#9CA3AF"
+                />
+                <Text style={styles.label}>Categoría</Text>
+                <CategoriaPicker
+                  value={duplicateForm.categoria}
+                  onChange={(text) => setDuplicateForm({ ...duplicateForm, categoria: text })}
+                  placeholder="Seleccionar categoría"
+                  showLabel={false}
+                />
+                <Text style={styles.label}>Ubicación</Text>
+                <TextInput
+                  style={styles.input}
+                  value={duplicateForm.ubicacion}
+                  onChangeText={(t) => setDuplicateForm({ ...duplicateForm, ubicacion: t })}
+                  placeholder="Ej: Estante A3"
+                  placeholderTextColor="#9CA3AF"
+                />
+                <View style={styles.row}>
+                  <View style={[styles.inputGroup, { flex: 1, marginRight: 10 }]}>
+                    <Text style={styles.label}>Cantidad *</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={duplicateForm.cantidad}
+                      onChangeText={(t) => setDuplicateForm({ ...duplicateForm, cantidad: t })}
+                      placeholder="Ej: 50"
+                      placeholderTextColor="#9CA3AF"
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={[styles.inputGroup, { flex: 1 }]}>
+                    <Text style={styles.label}>Vencimiento *</Text>
+                    <DatePickerInput
+                      label=""
+                      value={duplicateForm.vencimiento}
+                      onChange={(date) => setDuplicateForm({ ...duplicateForm, vencimiento: date })}
+                      placeholder="Seleccionar fecha"
+                      required={true}
+                    />
+                  </View>
+                </View>
+                <TouchableOpacity style={styles.saveButton} onPress={handleSaveDuplicate}>
+                  <Text style={styles.saveButtonText}>Duplicar Medicamento</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
     </View>
   );
@@ -887,6 +1150,28 @@ const styles = StyleSheet.create({
     borderTopColor: '#E5E7EB',
     paddingTop: 8,
   },
+  editButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    borderRadius: 8,
+    gap: 6,
+    backgroundColor: '#EDE9FE',
+  },
+  editButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 14 },
+  duplicateButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    borderRadius: 8,
+    gap: 6,
+    backgroundColor: '#FEF3C7',
+  },
+  duplicateButtonText: { color: '#EA580C', fontWeight: '600', fontSize: 14 },
   deleteButton: {
     flex: 1,
     flexDirection: 'row',
@@ -951,4 +1236,48 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingBottom: 24,
   },
+  // Estilos para modales de editar/duplicar
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    width: '90%',
+    maxHeight: '85%',
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#1F2937' },
+  modalBody: { padding: 20 },
+  label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 5 },
+  input: {
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 16,
+    color: '#1F2937',
+  },
+  row: { flexDirection: 'row', marginBottom: 16 },
+  inputGroup: { marginBottom: 0 },
+  saveButton: {
+    backgroundColor: '#7C3AED',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  saveButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
 });

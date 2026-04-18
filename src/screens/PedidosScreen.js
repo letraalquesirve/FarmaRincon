@@ -13,17 +13,19 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { db } from '../../firebaseConfig';
 import {
   collection,
-  onSnapshot,
   query,
   orderBy,
   addDoc,
   updateDoc,
   doc,
   deleteDoc,
+  onSnapshot,
 } from 'firebase/firestore';
 import {
   Package,
@@ -45,7 +47,7 @@ import {
   CheckSquare,
   Square,
 } from 'lucide-react-native';
-import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
+//import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 
 export default function PedidosScreen({ user }) {
   const [pedidos, setPedidos] = useState([]);
@@ -80,34 +82,41 @@ export default function PedidosScreen({ user }) {
     return user?.nombre || user?.email?.split('@')[0] || 'usuario';
   };
 
+  // PEDIDOS - onSnapshot en tiempo real
   useEffect(() => {
-    const qPedidos = query(collection(db, 'pedidos'), orderBy('fechaPedido', 'desc'));
-    const unsubscribePedidos = onSnapshot(qPedidos, (snapshot) => {
-      const docs = [];
-      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
+    console.log('🟢 Suscribiendo a cambios en pedidos...');
+    const q = query(collection(db, 'pedidos'), orderBy('fechaPedido', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      console.log('📦 Pedidos actualizados:', docs.length);
       setPedidos(docs);
-    });
-
-    const qEntregas = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
-    const unsubscribeEntregas = onSnapshot(qEntregas, (snapshot) => {
-      const docs = [];
-      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
-      setEntregas(docs);
-    });
-
-    const qMedicamentos = query(collection(db, 'medicamentos'), orderBy('nombre', 'asc'));
-    const unsubscribeMedicamentos = onSnapshot(qMedicamentos, (snapshot) => {
-      const docs = [];
-      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
-      setMedicamentos(docs);
       setLoading(false);
     });
+    return () => unsubscribe();
+  }, []);
 
-    return () => {
-      unsubscribePedidos();
-      unsubscribeEntregas();
-      unsubscribeMedicamentos();
-    };
+  // ENTREGAS - onSnapshot para tener las entregas actualizadas
+  useEffect(() => {
+    console.log('🟢 Suscribiendo a cambios en entregas...');
+    const q = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      console.log('📦 Entregas actualizadas:', docs.length);
+      setEntregas(docs);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // MEDICAMENTOS
+  useEffect(() => {
+    console.log('🟢 Suscribiendo a cambios en medicamentos...');
+    const q = query(collection(db, 'medicamentos'), orderBy('nombre', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      console.log('📦 Medicamentos actualizados:', docs.length);
+      setMedicamentos(docs);
+    });
+    return () => unsubscribe();
   }, []);
 
   const buscarMedicamentos = (texto) => {
@@ -347,10 +356,8 @@ export default function PedidosScreen({ user }) {
     }
   };
 
-  // Cuenta la cantidad de items (medicamentos diferentes) entregados, no las unidades
   const getTotalEntregadosCount = (pedido) => {
     if (!pedido.entregasRealizadas) return 0;
-    // Suma la cantidad de items (medicamentos diferentes) en todas las entregas
     return pedido.entregasRealizadas.reduce((total, entrega) => {
       return total + (entrega.items?.length || 0);
     }, 0);
@@ -532,7 +539,6 @@ export default function PedidosScreen({ user }) {
                     </View>
                   )}
 
-                  {/* Medicamentos solicitados - estilo compacto como entregados */}
                   <View style={styles.medicamentosEntregadosContainer}>
                     <Text style={styles.medicamentosEntregadosTitle}>
                       Medicamentos solicitados:
@@ -551,7 +557,6 @@ export default function PedidosScreen({ user }) {
                     })}
                   </View>
 
-                  {/* Medicamentos entregados */}
                   {pedido.entregasRealizadas && pedido.entregasRealizadas.length > 0 && (
                     <View style={styles.medicamentosEntregadosContainer}>
                       <Text style={styles.medicamentosEntregadosTitle}>
@@ -607,17 +612,30 @@ export default function PedidosScreen({ user }) {
       </ScrollView>
 
       {/* Modal para crear pedido */}
-      <Modal visible={showForm} animationType="slide" transparent>
+      <Modal
+        visible={showForm}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowForm(false)}
+      >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Nuevo Pedido</Text>
-              <TouchableOpacity onPress={() => setShowForm(false)}>
-                <XCircle size={24} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.modalBody}>
-              <View style={styles.modalBodyContent}>
+          <KeyboardAvoidingView
+            behavior="padding"
+            style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+          >
+            <ScrollView
+              style={styles.modalContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Nuevo Pedido</Text>
+                <TouchableOpacity onPress={() => setShowForm(false)}>
+                  <XCircle size={24} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.modalBody}>
                 <Text style={styles.label}>Nombre del solicitante *</Text>
                 <TextInput
                   placeholder="Ej: Juan Pérez"
@@ -698,7 +716,7 @@ export default function PedidosScreen({ user }) {
                 </TouchableOpacity>
               </View>
             </ScrollView>
-          </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
 
@@ -787,9 +805,7 @@ export default function PedidosScreen({ user }) {
               <View style={styles.emptyListContainer}>
                 <Package color="#D1D5DB" size={48} />
                 <Text style={styles.emptyListText}>
-                  {busqueda
-                    ? 'No se encontraron medicamentos'
-                    : 'Busca un medicamento para agregar'}
+                  {busqueda ? 'No se encontraron medicamentos' : 'Busca a medicamento para agregar'}
                 </Text>
               </View>
             }
@@ -904,7 +920,6 @@ export default function PedidosScreen({ user }) {
                       </TouchableOpacity>
                     );
                   })}
-
                   <TouchableOpacity
                     style={[
                       styles.asignarButton,
@@ -1059,8 +1074,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  modalContent: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '80%' },
-  modalContentLarge: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '80%' },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    width: '90%',
+    maxHeight: '95%',
+  },
+  modalContentLarge: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '95%' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1070,9 +1090,9 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E5E7EB',
   },
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
-  modalBody: { padding: 20 },
+  modalBody: { padding: 20, maxHeight: '95%' },
   modalBodyContent: { padding: 20 },
-  modalBodyScroll: { maxHeight: '80%' },
+  modalBodyScroll: { maxHeight: '95%' },
   label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 5 },
   sectionLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 10 },
   input: {

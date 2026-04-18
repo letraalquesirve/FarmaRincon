@@ -39,6 +39,7 @@ import {
   ChevronUp,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
+import { sendLocalNotification } from '../services/NotificationService';
 
 export default function EntregasScreen({ user }) {
   const [entregas, setEntregas] = useState([]);
@@ -67,13 +68,10 @@ export default function EntregasScreen({ user }) {
   };
 
   useEffect(() => {
-    const qEntregas = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
-    const unsubscribeEntregas = onSnapshot(qEntregas, (snapshot) => {
-      const docs = [];
-      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
-      setEntregas(docs);
-    });
+    cargarEntregas();
+  }, []);
 
+  useEffect(() => {
     const qMedicamentos = query(
       collection(db, 'medicamentos'),
       where('activo', '==', true),
@@ -82,15 +80,28 @@ export default function EntregasScreen({ user }) {
     const unsubscribeMedicamentos = onSnapshot(qMedicamentos, (snapshot) => {
       const docs = [];
       snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
+      console.log('📦 Medicamentos cargados:', docs.length); // 👈 Agrega este log
       setMedicamentos(docs);
       setLoading(false);
     });
-
-    return () => {
-      unsubscribeEntregas();
-      unsubscribeMedicamentos();
-    };
+    return () => unsubscribeMedicamentos();
   }, []);
+
+  const cargarEntregas = async () => {
+    setLoading(true);
+    try {
+      const q = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        setEntregas(docs);
+        setLoading(false);
+      });
+    } catch (error) {
+      console.error('Error cargando entregas:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const getFilteredEntregas = () => {
     let filtered = [...entregas];
@@ -189,6 +200,18 @@ export default function EntregasScreen({ user }) {
 
   const eliminarMedicamento = (id) => {
     setMedicamentosSeleccionados(medicamentosSeleccionados.filter((m) => m.id !== id));
+  };
+
+  const recargarEntregas = async () => {
+    try {
+      const q = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
+      const snapshot = await getDocs(q);
+      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      setEntregas(docs);
+      console.log('✅ Entregas recargadas:', docs.length);
+    } catch (error) {
+      console.error('Error recargando entregas:', error);
+    }
   };
 
   const verificarEntregaExistente = async () => {
@@ -310,7 +333,13 @@ export default function EntregasScreen({ user }) {
       });
 
       Alert.alert('Éxito', 'Entrega registrada correctamente', [
-        { text: 'OK', onPress: resetForm },
+        {
+          text: 'OK',
+          onPress: () => {
+            resetForm();
+            recargarEntregas(); // 👈 Esto actualiza la lista
+          },
+        },
       ]);
     } catch (error) {
       console.error('Error:', error);

@@ -35,6 +35,8 @@ import {
   Activity,
   Key,
   FileText,
+  ClipboardList,
+  MinusCircle,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { isAdmin } from '../services/AuthService';
@@ -53,8 +55,11 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
   const [cargandoInactivos, setCargandoInactivos] = useState(false);
   const [hayMasInactivos, setHayMasInactivos] = useState(true);
   const [generatingPDF, setGeneratingPDF] = useState(false);
-
   const userIsAdmin = isAdmin(user);
+  const [showPedidosPendientes, setShowPedidosPendientes] = useState(false);
+  const [showEntregasAbiertas, setShowEntregasAbiertas] = useState(false);
+  const [pedidosPendientes, setPedidosPendientes] = useState([]);
+  const [entregasAbiertas, setEntregasAbiertas] = useState([]);
 
   // Cargar medicinos activos (sin paginación, son pocos)
   useEffect(() => {
@@ -80,6 +85,51 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
   useEffect(() => {
     verificarVencimientos();
   }, [medicamentos]);
+
+  // Cargar datos de pedidos pendientes y entregas abiertas en tiempo real
+  useEffect(() => {
+    console.log('🟢 Suscribiendo a cambios en pedidos pendientes...');
+    const qPedidos = query(collection(db, 'pedidos'), where('atendido', '==', false));
+    const unsubscribePedidos = onSnapshot(qPedidos, (snapshot) => {
+      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      console.log('📦 Pedidos pendientes actualizados:', docs.length);
+      setPedidosPendientes(docs);
+    });
+
+    console.log('🟢 Suscribiendo a cambios en entregas abiertas...');
+    const qEntregas = query(
+      collection(db, 'entregas'),
+      where('estado', '==', 'abierta'),
+      where('pedidoId', '==', null)
+    );
+    const unsubscribeEntregas = onSnapshot(qEntregas, (snapshot) => {
+      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      console.log('📦 Entregas abiertas actualizadas:', docs.length);
+      setEntregasAbiertas(docs);
+    });
+
+    return () => {
+      unsubscribePedidos();
+      unsubscribeEntregas();
+    };
+  }, []);
+
+  // Funciones PDF
+  const handlePDFPedidosPendientes = () => {
+    generatePDFForPedidos(
+      pedidosPendientes,
+      'LISTADO DE PEDIDOS PENDIENTES',
+      'Total de pedidos pendientes'
+    );
+  };
+
+  const handlePDFEntregasAbiertas = () => {
+    generatePDFForEntregas(
+      entregasAbiertas,
+      'LISTADO DE ENTREGAS ABIERTAS',
+      'Total de entregas abiertas'
+    );
+  };
 
   const verificarVencimientos = () => {
     const hoy = new Date();
@@ -393,45 +443,6 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
         </TouchableOpacity>
       </View>
 
-      {/* Stats Grid con íconos PDF */}
-      <View style={styles.statsGrid}>
-        <TouchableOpacity style={styles.statCard} onPress={handlePDFActivos} activeOpacity={0.7}>
-          <Text style={styles.statNumber}>{medicamentosActivos.length}</Text>
-          <Text style={styles.statLabel}>Activos</Text>
-          <FileText size={14} color="#7C3AED" style={styles.pdfIcon} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.statCard, styles.statVigente]}
-          onPress={handlePDFVigentes}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.statNumber}>{medicamentosVigentes.length}</Text>
-          <Text style={styles.statLabel}>Vigentes</Text>
-          <FileText size={14} color="#10B981" style={styles.pdfIcon} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.statCard, styles.statPorVencer]}
-          onPress={handlePDFPorVencer}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.statNumber}>{medicamentosPorVencer.length}</Text>
-          <Text style={styles.statLabel}>Por vencer</Text>
-          <FileText size={14} color="#EA580C" style={styles.pdfIcon} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.statCard, styles.statVencido]}
-          onPress={handlePDFVencidos}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.statNumber}>{medicamentosVencidos.length}</Text>
-          <Text style={styles.statLabel}>Vencidos</Text>
-          <FileText size={14} color="#DC2626" style={styles.pdfIcon} />
-        </TouchableOpacity>
-      </View>
-
       {/* Inactivos con paginación */}
       {medicamentosInactivos.length > 0 && (
         <View style={styles.inactivosCard}>
@@ -552,6 +563,65 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           {showVencidos &&
             medicamentosVencidos.map((med) => (
               <MedicamentoCard key={med.id} med={med} status="vencido" />
+            ))}
+        </View>
+      )}
+      {/* Pedidos Pendientes */}
+      {pedidosPendientes.length > 0 && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setShowPedidosPendientes(!showPedidosPendientes)}
+          >
+            <View style={styles.sectionTitle}>
+              <ClipboardList color="#7C3AED" size={20} />
+              <Text style={[styles.sectionTitleText, { color: '#7C3AED' }]}>
+                Pedidos Pendientes ({pedidosPendientes.length})
+              </Text>
+              <TouchableOpacity onPress={handlePDFPedidosPendientes} style={styles.inlinePdfButton}>
+                <FileText size={16} color="#7C3AED" />
+              </TouchableOpacity>
+            </View>
+            {showPedidosPendientes ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+          </TouchableOpacity>
+          {showPedidosPendientes &&
+            pedidosPendientes.map((pedido) => (
+              <View key={pedido.id} style={styles.pedidoCardCompacto}>
+                <Text style={styles.pedidoNombreCompacto}>{pedido.nombreSolicitante}</Text>
+                <Text style={styles.pedidoInfoCompacto}>
+                  {pedido.medicamentosSolicitados?.length || 0} medicamentos
+                </Text>
+              </View>
+            ))}
+        </View>
+      )}
+
+      {/* Entregas Abiertas */}
+      {entregasAbiertas.length > 0 && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setShowEntregasAbiertas(!showEntregasAbiertas)}
+          >
+            <View style={styles.sectionTitle}>
+              <MinusCircle color="#EA580C" size={20} />
+              <Text style={[styles.sectionTitleText, { color: '#EA580C' }]}>
+                Entregas Abiertas ({entregasAbiertas.length})
+              </Text>
+              <TouchableOpacity onPress={handlePDFEntregasAbiertas} style={styles.inlinePdfButton}>
+                <FileText size={16} color="#EA580C" />
+              </TouchableOpacity>
+            </View>
+            {showEntregasAbiertas ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+          </TouchableOpacity>
+          {showEntregasAbiertas &&
+            entregasAbiertas.map((entrega) => (
+              <View key={entrega.id} style={styles.entregaCardCompacto}>
+                <Text style={styles.entregaDestinoCompacto}>{entrega.destino}</Text>
+                <Text style={styles.entregaInfoCompacto}>
+                  {entrega.items?.length || 0} medicamentos
+                </Text>
+              </View>
             ))}
         </View>
       )}
@@ -724,4 +794,45 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: 'center', justifyContent: 'center', padding: 40, marginTop: 20 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
   emptyText: { fontSize: 14, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
+  // Estilos para Pedidos Pendientes (compacto)
+  pedidoCardCompacto: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    marginHorizontal: 4,
+    borderLeftWidth: 3,
+    borderLeftColor: '#7C3AED',
+  },
+  pedidoNombreCompacto: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  pedidoInfoCompacto: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 4,
+  },
+
+  // Estilos para Entregas Abiertas (compacto)
+  entregaCardCompacto: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    marginHorizontal: 4,
+    borderLeftWidth: 3,
+    borderLeftColor: '#EA580C',
+  },
+  entregaDestinoCompacto: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  entregaInfoCompacto: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 4,
+  },
 });
