@@ -16,23 +16,13 @@ export default function LoginModal({ visible, onLogin, onClose }) {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // LoginModal.js - Versión PocketBase
   const handleLogin = async () => {
-    const trimmedUsername = username.trim();
-    if (!trimmedUsername) {
+    if (!username.trim()) {
       Alert.alert('Error', 'Ingresa tu nombre de usuario');
       return;
     }
-
-    setLoading(true);
-    const result = await verifyUser(trimmedUsername);
-    setLoading(false);
-
-    if (result.success) {
-      onLogin(result.user);
-      setUsername('');
-    } else {
-      Alert.alert('Error', result.error || 'Usuario no válido');
-    }
+    onLogin(username.trim());
   };
 
   return (

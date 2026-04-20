@@ -1,28 +1,18 @@
-// App.js
+// App.js - Versión corregida para PocketBase con tabla "usuarios"
+
 import React, { useState, useEffect } from 'react';
-import { LogBox, View, ActivityIndicator, Platform, Dimensions } from 'react-native';
+import { LogBox, View, ActivityIndicator, Platform, Dimensions, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import * as Notifications from 'expo-notifications';
-import { addNotificationListener } from './src/services/NotificationService';
-import {
-  Home,
-  Package,
-  PlusCircle,
-  History,
-  ClipboardList,
-  MinusCircle,
-} from 'lucide-react-native';
+import { Home, Package, PlusCircle, History, ClipboardList, MinusCircle } from 'lucide-react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Ignorar warnings
-LogBox.ignoreLogs([
-  '@firebase/firestore: Firestore (12.11.0): Error using user provided cache.',
-  'Setting a timer for a long period of time',
-]);
+// 👇 Importar PocketBase
+import { pb } from './src/services/PocketBaseConfig';
 
+// Importar screens
 import HomeScreen from './src/screens/HomeScreen';
 import InventoryScreen from './src/screens/InventoryScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
@@ -31,7 +21,10 @@ import PedidosScreen from './src/screens/PedidosScreen';
 import EntregasScreen from './src/screens/EntregasScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
 import LoginModal from './src/components/LoginModal';
-import { isAdmin } from './src/services/AuthService';
+
+LogBox.ignoreLogs([
+  'Setting a timer for a long period of time',
+]);
 
 const Tab = createBottomTabNavigator();
 
@@ -46,7 +39,6 @@ export default function App() {
   useEffect(() => {
     checkApiKey();
 
-    // Detectar altura de la barra de navegación en Android
     if (Platform.OS === 'android') {
       setTimeout(() => {
         const { height: screenHeight } = Dimensions.get('window');
@@ -60,17 +52,6 @@ export default function App() {
         }
       }, 100);
     }
-
-    // Listener de notificaciones
-    const notificationSubscription = addNotificationListener((response) => {
-      const { data } = response.notification.request.content;
-      console.log('Notificación tocada:', data);
-    });
-
-    // Limpiar al desmontar
-    return () => {
-      notificationSubscription.remove();
-    };
   }, []);
 
   const checkApiKey = async () => {
@@ -88,32 +69,65 @@ export default function App() {
     }
   };
 
-  const handleLogin = (loggedUser) => {
-    setUser(loggedUser);
-    setIsLoggedIn(true);
+  // 👇 Login usando tabla "usuarios" (solo nombre, sin email/contraseña)
+  const handleLogin = async (username) => {
+    try {
+      // Buscar usuario por nombre en la colección "usuarios"
+      const result = await pb.collection('usuarios').getList(1, 1, {
+        filter: `nombre = "${username}"`
+      });
+      
+      if (result.items.length === 0) {
+        Alert.alert('Error', 'Usuario no encontrado');
+        return;
+      }
+      
+      const userData = result.items[0];
+      setUser(userData);
+      setIsLoggedIn(true);
+      
+      // Guardar sesión en AsyncStorage (opcional, para persistencia)
+      await AsyncStorage.setItem('currentUser', JSON.stringify(userData));
+      
+    } catch (error) {
+      console.error('Error de login:', error);
+      Alert.alert('Error', 'No se pudo conectar con el servidor');
+    }
   };
 
-  const handleLogout = () => {
+  // 👇 Logout
+  const handleLogout = async () => {
     setUser(null);
     setIsLoggedIn(false);
+    await AsyncStorage.removeItem('currentUser');
   };
+
+  // 👇 Verificar si hay sesión guardada al iniciar
+  useEffect(() => {
+    const loadStoredUser = async () => {
+      try {
+        const storedUser = await AsyncStorage.getItem('currentUser');
+        if (storedUser) {
+          const userData = JSON.parse(storedUser);
+          setUser(userData);
+          setIsLoggedIn(true);
+        }
+      } catch (error) {
+        console.error('Error loading stored user:', error);
+      }
+    };
+    loadStoredUser();
+  }, []);
 
   if (isLoading) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: 'center',
-          alignItems: 'center',
-          backgroundColor: '#F3F4F6',
-        }}
-      >
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' }}>
         <ActivityIndicator size="large" color="#7C3AED" />
       </View>
     );
   }
 
-  const isUserAdmin = user ? isAdmin(user) : false;
+  const isUserAdmin = user?.tipo === 'admin';
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -141,7 +155,7 @@ export default function App() {
                 },
               }}
             >
-              <Tab.Screen name="Inicio" options={{ title: 'Farmacia Iglesia' }}>
+              <Tab.Screen name="Inicio" options={{ title: 'FarmaRincón' }}>
                 {(props) => (
                   <HomeScreen
                     {...props}
