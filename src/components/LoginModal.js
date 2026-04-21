@@ -1,3 +1,4 @@
+// src/components/LoginModal.js
 import React, { useState } from 'react';
 import {
   Modal,
@@ -10,19 +11,24 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Key, LogIn, X } from 'lucide-react-native';
-import { verifyUser } from '../services/AuthService';
 
 export default function LoginModal({ visible, onLogin, onClose }) {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // LoginModal.js - Versión PocketBase
   const handleLogin = async () => {
-    if (!username.trim()) {
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) {
       Alert.alert('Error', 'Ingresa tu nombre de usuario');
       return;
     }
-    onLogin(username.trim());
+
+    setLoading(true);
+    // Simular un pequeño retraso para mostrar el loading
+    setTimeout(() => {
+      setLoading(false);
+      onLogin(trimmedUsername);
+    }, 500);
   };
 
   return (

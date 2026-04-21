@@ -1,6 +1,5 @@
 // src/screens/PedidosScreen.js
-import React, { useState, useEffect } from 'react';
-import { sendLocalNotification } from '../services/NotificationService';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,18 +14,8 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
+  RefreshControl, // ✅ IMPORTANTE: Agregar RefreshControl
 } from 'react-native';
-import { db } from '../../firebaseConfig';
-import {
-  collection,
-  query,
-  orderBy,
-  addDoc,
-  updateDoc,
-  doc,
-  deleteDoc,
-  onSnapshot,
-} from 'firebase/firestore';
 import {
   Package,
   Calendar,
@@ -47,12 +36,14 @@ import {
   CheckSquare,
   Square,
 } from 'lucide-react-native';
-//import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
+import { pb } from '../services/PocketBaseConfig';
+import { sendLocalNotification } from '../services/NotificationService';
 
 export default function PedidosScreen({ user }) {
   const [pedidos, setPedidos] = useState([]);
   const [entregas, setEntregas] = useState([]);
   const [medicamentos, setMedicamentos] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [showAtenderModal, setShowAtenderModal] = useState(false);
   const [selectedPedido, setSelectedPedido] = useState(null);
@@ -60,7 +51,6 @@ export default function PedidosScreen({ user }) {
   const [filter, setFilter] = useState('pendientes');
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedId, setExpandedId] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     nombreSolicitante: '',
@@ -77,92 +67,146 @@ export default function PedidosScreen({ user }) {
   const [zoomModalVisible, setZoomModalVisible] = useState(false);
   const [zoomImage, setZoomImage] = useState(null);
   const [zoomMedName, setZoomMedName] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
-  const getUserName = () => {
-    return user?.nombre || user?.email?.split('@')[0] || 'usuario';
-  };
+  // Refs para evitar cargas duplicadas y manejar suscripciones
+  const isLoadingRef = useRef(false);
+  const subscriptionsRef = useRef([]);
 
-  // PEDIDOS - onSnapshot en tiempo real
-  useEffect(() => {
-    console.log('🟢 Suscribiendo a cambios en pedidos...');
-    const q = query(collection(db, 'pedidos'), orderBy('fechaPedido', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      console.log('📦 Pedidos actualizados:', docs.length);
-      setPedidos(docs);
+  const getUserName = () => user?.nombre || 'usuario';
+
+  // ── Función de carga principal ──
+  const loadData = useCallback(async (isRefresh = false) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+
+    try {
+      const [pedidosResult, entregasResult, medicamentosResult] = await Promise.all([
+        pb.collection('pedidos').getList(1, 100, { sort: '-fechaPedido', requestKey: null }),
+        pb.collection('entregas').getList(1, 100, { sort: '-fechaCreacion', requestKey: null }),
+        pb
+          .collection('medicamentos')
+          .getList(1, 500, { filter: 'activo = true', sort: 'nombre', requestKey: null }),
+      ]);
+      setPedidos(pedidosResult.items);
+      setEntregas(entregasResult.items);
+      setMedicamentos(medicamentosResult.items);
+    } catch (error) {
+      if (!error.isAbort) {
+        console.error('Error cargando datos:', error);
+        Alert.alert('Error', 'No se pudieron cargar los datos');
+      }
+    } finally {
+      isLoadingRef.current = false;
       setLoading(false);
-    });
-    return () => unsubscribe();
+      setRefreshing(false);
+    }
   }, []);
 
-  // ENTREGAS - onSnapshot para tener las entregas actualizadas
+  // ── Realtime subscriptions (CORREGIDO) ──
+  const setupRealtimeSubscriptions = useCallback(() => {
+    // Limpiar suscripciones anteriores ✅ CORREGIDO
+    subscriptionsRef.current.forEach((sub) => {
+      if (sub && typeof sub.unsubscribe === 'function') {
+        sub.unsubscribe();
+      }
+    });
+    subscriptionsRef.current = [];
+
+    // Suscribirse a cambios en pedidos
+    const pedidosSub = pb.collection('pedidos').subscribe('*', (e) => {
+      console.log('🔄 Cambio en pedidos:', e.action, e.record?.id);
+
+      if (e.action === 'create') {
+        setPedidos((prev) => [e.record, ...prev]);
+      } else if (e.action === 'update') {
+        setPedidos((prev) => prev.map((p) => (p.id === e.record.id ? e.record : p)));
+      } else if (e.action === 'delete') {
+        setPedidos((prev) => prev.filter((p) => p.id !== e.record.id));
+      }
+    });
+
+    // Suscribirse a cambios en entregas
+    const entregasSub = pb.collection('entregas').subscribe('*', (e) => {
+      console.log('🔄 Cambio en entregas:', e.action, e.record?.id);
+
+      if (e.action === 'create') {
+        setEntregas((prev) => [e.record, ...prev]);
+      } else if (e.action === 'update') {
+        setEntregas((prev) => prev.map((e2) => (e2.id === e.record.id ? e.record : e2)));
+      } else if (e.action === 'delete') {
+        setEntregas((prev) => prev.filter((e2) => e2.id !== e.record.id));
+      }
+    });
+
+    // Suscribirse a cambios en medicamentos
+    const medicamentosSub = pb.collection('medicamentos').subscribe('*', (e) => {
+      console.log('🔄 Cambio en medicamentos:', e.action);
+      if (e.action === 'update' || e.action === 'create') {
+        loadData();
+      }
+    });
+
+    // Guardar las suscripciones (objetos con método unsubscribe)
+    subscriptionsRef.current = [pedidosSub, entregasSub, medicamentosSub];
+  }, [loadData]);
+
+  // Cargar datos iniciales y setup realtime
   useEffect(() => {
-    console.log('🟢 Suscribiendo a cambios en entregas...');
-    const q = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      console.log('📦 Entregas actualizadas:', docs.length);
-      setEntregas(docs);
-    });
-    return () => unsubscribe();
-  }, []);
+    loadData();
+    setupRealtimeSubscriptions();
 
-  // MEDICAMENTOS
-  useEffect(() => {
-    console.log('🟢 Suscribiendo a cambios en medicamentos...');
-    const q = query(collection(db, 'medicamentos'), orderBy('nombre', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      console.log('📦 Medicamentos actualizados:', docs.length);
-      setMedicamentos(docs);
-    });
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      // Limpiar suscripciones al desmontar ✅ CORREGIDO
+      subscriptionsRef.current.forEach((sub) => {
+        if (sub && typeof sub.unsubscribe === 'function') {
+          sub.unsubscribe();
+        }
+      });
+    };
+  }, [loadData, setupRealtimeSubscriptions]);
 
+  const onRefresh = useCallback(() => loadData(true), [loadData]);
+
+  // El resto del código permanece igual (buscarMedicamentos, actualizarCantidad, etc.)
   const buscarMedicamentos = (texto) => {
     if (!texto.trim()) {
       setMedicamentosFiltrados([]);
       return;
     }
-
     const textoLower = texto.toLowerCase().trim();
     const filtrados = medicamentos.filter(
       (m) =>
-        m.activo !== false &&
-        (m.nombre.toLowerCase().includes(textoLower) ||
-          m.presentacion?.toLowerCase().includes(textoLower))
+        m.nombre.toLowerCase().includes(textoLower) ||
+        (m.presentacion || '').toLowerCase().includes(textoLower)
     );
     setMedicamentosFiltrados(filtrados);
   };
 
   const actualizarCantidad = (medicamentoId, texto) => {
-    setCantidades((prev) => ({
-      ...prev,
-      [medicamentoId]: texto,
-    }));
+    setCantidades((prev) => ({ ...prev, [medicamentoId]: texto }));
   };
 
   const agregarASeleccion = (medicamento) => {
     const cantidad = parseInt(cantidades[medicamento.id]);
-
     if (!cantidad || cantidad <= 0) {
       Alert.alert('Error', 'Ingresa una cantidad válida');
       return;
     }
-
-    const yaSeleccionado = seleccionTemporal.find((s) => s.medicamentoId === medicamento.id);
-    if (yaSeleccionado) {
+    if (seleccionTemporal.find((s) => s.medicamentoId === medicamento.id)) {
       Alert.alert('Error', 'Este medicamento ya está en la lista.');
       return;
     }
-
     if (cantidad > medicamento.cantidad) {
       Alert.alert('Error', `Stock insuficiente. Disponible: ${medicamento.cantidad} unidades`);
       return;
     }
 
     const nuevoItem = {
-      id: Date.now().toString() + Math.random(),
+      id: Date.now().toString() + Math.random().toString(36).substring(2, 6),
       nombre: medicamento.nombre,
       presentacion: medicamento.presentacion || 'No especificada',
       cantidad: cantidad,
@@ -171,7 +215,6 @@ export default function PedidosScreen({ user }) {
     };
 
     setSeleccionTemporal([...seleccionTemporal, nuevoItem]);
-
     setCantidades((prev) => {
       const newCantidades = { ...prev };
       delete newCantidades[medicamento.id];
@@ -188,12 +231,10 @@ export default function PedidosScreen({ user }) {
       Alert.alert('Error', 'No has seleccionado ningún medicamento');
       return;
     }
-
     setFormData({
       ...formData,
       medicamentosSolicitados: [...formData.medicamentosSolicitados, ...seleccionTemporal],
     });
-
     setSeleccionTemporal([]);
     setCantidades({});
     setShowMedicamentoModal(false);
@@ -207,12 +248,10 @@ export default function PedidosScreen({ user }) {
 
   const handleCreatePedido = async () => {
     if (isSubmitting) return;
-
     if (!formData.nombreSolicitante) {
       Alert.alert('Error', 'El nombre del solicitante es obligatorio');
       return;
     }
-
     if (formData.medicamentosSolicitados.length === 0) {
       Alert.alert('Error', 'Debes agregar al menos un medicamento');
       return;
@@ -220,21 +259,31 @@ export default function PedidosScreen({ user }) {
 
     setIsSubmitting(true);
 
-    try {
-      await addDoc(collection(db, 'pedidos'), {
-        ...formData,
-        fechaPedido: new Date().toISOString(),
-        atendido: false,
-        entregasRealizadas: [],
-        fechaAtencion: null,
-        creadoPor: getUserName(),
-      });
+    const medicamentosLimpios = formData.medicamentosSolicitados.map((med) => {
+      const { id, ...medLimpio } = med;
+      return medLimpio;
+    });
 
+    const pedidoData = {
+      nombreSolicitante: formData.nombreSolicitante.trim(),
+      lugarResidencia: formData.lugarResidencia.trim() || '',
+      telefonoContacto: formData.telefonoContacto.trim() || '',
+      notas: formData.notas.trim() || '',
+      medicamentosSolicitados: medicamentosLimpios,
+      atendido: false,
+      entregasRealizadas: [],
+      fechaPedido: new Date().toISOString(),
+      fechaAtencion: null,
+      creadoPor: getUserName(),
+      atendidoPor: '',
+    };
+
+    try {
+      await pb.collection('pedidos').create(pedidoData);
       await sendLocalNotification(
         '📋 Nuevo Pedido',
         `${formData.nombreSolicitante} ha solicitado ${formData.medicamentosSolicitados.length} medicamento(s)`
       );
-
       setFormData({
         nombreSolicitante: '',
         lugarResidencia: '',
@@ -243,15 +292,11 @@ export default function PedidosScreen({ user }) {
         medicamentosSolicitados: [],
       });
       setShowForm(false);
-
-      Alert.alert('Éxito', 'Pedido registrado correctamente', [
-        { text: 'OK', onPress: () => setIsSubmitting(false) },
-      ]);
+      Alert.alert('Éxito', 'Pedido registrado correctamente');
     } catch (error) {
-      console.error('Error:', error);
-      Alert.alert('Error', 'No se pudo crear el pedido', [
-        { text: 'OK', onPress: () => setIsSubmitting(false) },
-      ]);
+      console.error('❌ Error:', error);
+      Alert.alert('Error', `No se pudo crear el pedido: ${error.message}`);
+    } finally {
       setIsSubmitting(false);
     }
   };
@@ -264,7 +309,7 @@ export default function PedidosScreen({ user }) {
         style: 'destructive',
         onPress: async () => {
           try {
-            await deleteDoc(doc(db, 'pedidos', pedidoId));
+            await pb.collection('pedidos').delete(pedidoId);
             Alert.alert('Éxito', 'Pedido eliminado correctamente');
           } catch (error) {
             Alert.alert('Error', 'No se pudo eliminar el pedido');
@@ -292,16 +337,12 @@ export default function PedidosScreen({ user }) {
     }
 
     try {
-      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
-      const entregasActuales = selectedPedido.entregasRealizadas || [];
       const nuevasEntregas = [];
-
       for (const entregaId of selectedEntregasIds) {
         const entrega = entregas.find((e) => e.id === entregaId);
         if (!entrega) continue;
 
-        const entregaRef = doc(db, 'entregas', entregaId);
-        await updateDoc(entregaRef, {
+        await pb.collection('entregas').update(entregaId, {
           pedidoId: selectedPedido.id,
           vinculadaEn: new Date().toISOString(),
           vinculadaPor: getUserName(),
@@ -317,7 +358,8 @@ export default function PedidosScreen({ user }) {
         });
       }
 
-      await updateDoc(pedidoRef, {
+      const entregasActuales = selectedPedido.entregasRealizadas || [];
+      await pb.collection('pedidos').update(selectedPedido.id, {
         entregasRealizadas: [...entregasActuales, ...nuevasEntregas],
         atendido: true,
         fechaAtencion: new Date().toISOString(),
@@ -339,7 +381,7 @@ export default function PedidosScreen({ user }) {
     if (searchTerm) {
       filtered = filtered.filter(
         (p) =>
-          p.nombreSolicitante.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          p.nombreSolicitante?.toLowerCase().includes(searchTerm.toLowerCase()) ||
           p.medicamentosSolicitados?.some((m) =>
             m.nombre.toLowerCase().includes(searchTerm.toLowerCase())
           ) ||
@@ -389,8 +431,7 @@ export default function PedidosScreen({ user }) {
 
   const openZoomModal = (imageUri, medName) => {
     if (!imageUri) return;
-    const fullUri = `data:image/jpeg;base64,${imageUri}`;
-    setZoomImage(fullUri);
+    setZoomImage(`data:image/jpeg;base64,${imageUri}`);
     setZoomMedName(medName);
     setZoomModalVisible(true);
   };
@@ -475,7 +516,10 @@ export default function PedidosScreen({ user }) {
         </ScrollView>
       </View>
 
-      <ScrollView style={styles.content}>
+      <ScrollView
+        style={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
         {filteredPedidos.length === 0 ? (
           <View style={styles.emptyContainer}>
             <ClipboardList color="#D1D5DB" size={64} />
@@ -611,7 +655,7 @@ export default function PedidosScreen({ user }) {
         )}
       </ScrollView>
 
-      {/* Modal para crear pedido */}
+      {/* Modales - mantienen el mismo código (omitido por brevedad, pero igual al anterior) */}
       <Modal
         visible={showForm}
         animationType="slide"
@@ -620,7 +664,7 @@ export default function PedidosScreen({ user }) {
       >
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
-            behavior="padding"
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
           >
             <ScrollView
@@ -634,7 +678,6 @@ export default function PedidosScreen({ user }) {
                   <XCircle size={24} color="#6B7280" />
                 </TouchableOpacity>
               </View>
-
               <View style={styles.modalBody}>
                 <Text style={styles.label}>Nombre del solicitante *</Text>
                 <TextInput
@@ -644,7 +687,6 @@ export default function PedidosScreen({ user }) {
                   value={formData.nombreSolicitante}
                   onChangeText={(t) => setFormData({ ...formData, nombreSolicitante: t })}
                 />
-
                 <Text style={styles.label}>Lugar de residencia</Text>
                 <TextInput
                   placeholder="Ej: Colonia Centro"
@@ -653,7 +695,6 @@ export default function PedidosScreen({ user }) {
                   value={formData.lugarResidencia}
                   onChangeText={(t) => setFormData({ ...formData, lugarResidencia: t })}
                 />
-
                 <Text style={styles.label}>Teléfono</Text>
                 <TextInput
                   placeholder="Ej: 1234-5678"
@@ -663,7 +704,6 @@ export default function PedidosScreen({ user }) {
                   value={formData.telefonoContacto}
                   onChangeText={(t) => setFormData({ ...formData, telefonoContacto: t })}
                 />
-
                 <View style={styles.medicamentosSection}>
                   <Text style={styles.sectionLabel}>Medicamentos *</Text>
                   {formData.medicamentosSolicitados.map((med, idx) => (
@@ -688,7 +728,6 @@ export default function PedidosScreen({ user }) {
                     <Text style={{ color: '#7C3AED' }}>Agregar medicamentos</Text>
                   </TouchableOpacity>
                 </View>
-
                 <Text style={styles.label}>Notas</Text>
                 <TextInput
                   placeholder="Notas internas"
@@ -698,7 +737,6 @@ export default function PedidosScreen({ user }) {
                   value={formData.notas}
                   onChangeText={(t) => setFormData({ ...formData, notas: t })}
                 />
-
                 <TouchableOpacity
                   style={[
                     styles.saveButton,
@@ -720,7 +758,6 @@ export default function PedidosScreen({ user }) {
         </View>
       </Modal>
 
-      {/* Modal de selección de medicamentos */}
       <Modal visible={showMedicamentoModal} animationType="slide" transparent={false}>
         <View style={styles.fullModalContainer}>
           <View style={styles.fullModalHeader}>
@@ -767,7 +804,6 @@ export default function PedidosScreen({ user }) {
                     <Package color="#9CA3AF" size={24} />
                   </View>
                 )}
-
                 <View style={styles.medicamentoInfoSeleccion}>
                   <Text style={styles.medicamentoNombreSeleccion} numberOfLines={2}>
                     {item.nombre}
@@ -782,7 +818,6 @@ export default function PedidosScreen({ user }) {
                     </Text>
                   )}
                 </View>
-
                 <View style={styles.seleccionCantidadContainer}>
                   <TextInput
                     style={styles.cantidadInputSeleccion}
@@ -805,7 +840,9 @@ export default function PedidosScreen({ user }) {
               <View style={styles.emptyListContainer}>
                 <Package color="#D1D5DB" size={48} />
                 <Text style={styles.emptyListText}>
-                  {busqueda ? 'No se encontraron medicamentos' : 'Busca a medicamento para agregar'}
+                  {busqueda
+                    ? 'No se encontraron medicamentos'
+                    : 'Busca un medicamento para agregar'}
                 </Text>
               </View>
             }
@@ -841,7 +878,6 @@ export default function PedidosScreen({ user }) {
         </View>
       </Modal>
 
-      {/* Modal para atender pedido */}
       <Modal visible={showAtenderModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContentLarge}>
@@ -941,7 +977,6 @@ export default function PedidosScreen({ user }) {
         </View>
       </Modal>
 
-      {/* Modal de zoom para imágenes */}
       <Modal
         visible={zoomModalVisible}
         transparent={true}
@@ -962,6 +997,7 @@ export default function PedidosScreen({ user }) {
   );
 }
 
+// Styles (igual que antes - omitido por brevedad, mantén los que ya tenías)
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -1074,13 +1110,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 20,
-    width: '90%',
-    maxHeight: '95%',
-  },
-  modalContentLarge: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '95%' },
+  modalContent: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '80%' },
+  modalContentLarge: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '80%' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1090,9 +1121,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E5E7EB',
   },
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
-  modalBody: { padding: 20, maxHeight: '95%' },
-  modalBodyContent: { padding: 20 },
-  modalBodyScroll: { maxHeight: '95%' },
+  modalBody: { padding: 20 },
+  modalBodyScroll: { maxHeight: '80%' },
   label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 5 },
   sectionLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 10 },
   input: {
@@ -1151,54 +1181,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  entregaOptionSelected: {
-    backgroundColor: '#EDE9FE',
-    borderColor: '#7C3AED',
-    borderWidth: 2,
-  },
-  entregaOptionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
-  },
-  entregaOptionFecha: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#7C3AED',
-    flex: 1,
-  },
+  entregaOptionSelected: { backgroundColor: '#EDE9FE', borderColor: '#7C3AED', borderWidth: 2 },
+  entregaOptionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  entregaOptionFecha: { fontSize: 14, fontWeight: '600', color: '#7C3AED', flex: 1 },
   entregaOptionDestinoContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 8,
     gap: 8,
   },
-  entregaOptionDestinoLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  entregaOptionDestinoValue: {
-    fontSize: 12,
-    color: '#10B981',
-    fontWeight: '500',
-  },
-  entregaOptionCreadoPor: {
-    fontSize: 11,
-    color: '#6B7280',
-    marginBottom: 12,
-    fontStyle: 'italic',
-  },
-  entregaOptionItemsHeader: {
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  entregaOptionItemsTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
-  },
+  entregaOptionDestinoLabel: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  entregaOptionDestinoValue: { fontSize: 12, color: '#10B981', fontWeight: '500' },
+  entregaOptionCreadoPor: { fontSize: 11, color: '#6B7280', marginBottom: 12, fontStyle: 'italic' },
+  entregaOptionItemsHeader: { marginTop: 8, marginBottom: 4 },
+  entregaOptionItemsTitle: { fontSize: 12, fontWeight: '600', color: '#374151' },
   entregaOptionItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1220,14 +1216,8 @@ const styles = StyleSheet.create({
     margin: 16,
     gap: 8,
   },
-  asignarButtonDisabled: {
-    backgroundColor: '#9CA3AF',
-  },
-  asignarButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  asignarButtonDisabled: { backgroundColor: '#9CA3AF' },
+  asignarButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
   emptyEntregasContainer: { alignItems: 'center', padding: 40 },
   emptyEntregasText: {
     fontSize: 16,

@@ -15,22 +15,11 @@ import {
   RefreshControl,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import * as Print from 'expo-print';
-import { db } from '../../firebaseConfig';
-import {
-  collection,
-  onSnapshot,
-  query,
-  orderBy,
-  doc,
-  updateDoc,
-  addDoc,
-  where,
-  limit,
-  startAfter,
-  getDocs,
-} from 'firebase/firestore';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   Search,
   Package,
@@ -47,11 +36,10 @@ import {
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { isAdmin } from '../services/AuthService';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
+import { pb } from '../services/PocketBaseConfig';
 import DatePickerInput from '../components/DatePickerInput';
 import CategoriaPicker from '../components/CategoriaPicker';
-//import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
+import { useFocusEffect } from '@react-navigation/native';
 
 // ── Utilidades ───────────────────────────────────────────────
 const normalizeText = (text) => {
@@ -74,7 +62,11 @@ const escapeHtml = (text) => {
 };
 
 export default function InventoryScreen({ user }) {
-  const [medicamentosActivos, setMedicamentosActivos] = useState([]);
+  // ── MEJORA 3: Separación clara de estado (activos crudos / filtrados) ──
+  const [activos, setActivos] = useState([]); // Datos crudos del servidor
+  const [filteredActivos, setFilteredActivos] = useState([]); // Datos filtrados localmente
+
+  // Estado existente
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState('todos');
   const [showFilters, setShowFilters] = useState(false);
@@ -83,9 +75,7 @@ export default function InventoryScreen({ user }) {
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedMedName, setSelectedMedName] = useState('');
   const [generatingPDF, setGeneratingPDF] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-
-  // Estados para modales de Editar y Duplicar
+  const [loading, setLoading] = useState(true);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [duplicateModalVisible, setDuplicateModalVisible] = useState(false);
   const [currentEditMed, setCurrentEditMed] = useState(null);
@@ -112,7 +102,12 @@ export default function InventoryScreen({ user }) {
   const [ultimoDocInactivos, setUltimoDocInactivos] = useState(null);
   const [cargandoInactivos, setCargandoInactivos] = useState(false);
   const [hayMasInactivos, setHayMasInactivos] = useState(true);
-  const [cargandoInicial, setCargandoInicial] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // ── MEJORA 1: Ref para evitar cargas simultáneas ──
+  const isLoadingRef = useRef(false);
+  // ── Ref para mantener búsqueda entre recargas ──
+  const searchTermRef = useRef('');
 
   // ── Zoom con gesture-handler ─────────────────────────────
   const scale = useRef(new Animated.Value(1)).current;
@@ -144,80 +139,204 @@ export default function InventoryScreen({ user }) {
     scale.setValue(1);
   };
 
-  // Cargar activos en tiempo real
-  useEffect(() => {
-    const q = query(
-      collection(db, 'medicamentos'),
-      where('activo', '==', true),
-      orderBy('nombre', 'asc')
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = [];
-      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
-      setMedicamentosActivos(docs);
-      setCargandoInicial(false);
-      setRefreshing(false);
-    });
-    return () => unsubscribe();
-  }, []);
+  const getUserName = () => user?.nombre || 'usuario';
 
-  // Cargar inactivos con paginación
-  useEffect(() => {
-    if (showInactivos) {
-      cargarInactivos(true);
-    } else {
-      setInactivosVisibles([]);
-      setUltimoDocInactivos(null);
-      setHayMasInactivos(true);
-    }
-  }, [showInactivos]);
+  // ── MEJORA: Función de carga principal optimizada ──
+  const cargarActivos = useCallback(
+    async (isRefresh = false) => {
+      // ✅ Evitar cargas simultáneas
+      if (isLoadingRef.current) return;
+      isLoadingRef.current = true;
 
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        // ✅ MEJORA 2: requestKey: null evita auto-cancelación de PocketBase
+        const result = await pb.collection('medicamentos').getList(1, 1000, {
+          filter: 'activo = true',
+          sort: 'nombre',
+          requestKey: null, // ← Clave para evitar cancelación de peticiones duplicadas
+        });
+
+        // Guardar datos crudos
+        setActivos(result.items);
+
+        // ✅ MEJORA 4: Re-aplicar filtro local después de cargar
+        const currentSearch = searchTermRef.current;
+        let filtered = [...result.items];
+
+        if (currentSearch.trim()) {
+          const searchNorm = normalizeText(currentSearch);
+          filtered = filtered.filter(
+            (m) =>
+              normalizeText(m.nombre).includes(searchNorm) ||
+              normalizeText(m.presentacion || '').includes(searchNorm) ||
+              normalizeText(m.categoria || '').includes(searchNorm) ||
+              normalizeText(m.ubicacion || '').includes(searchNorm)
+          );
+        }
+
+        // Aplicar filtro de estado (vigentes/porVencer/vencidos)
+        if (filter !== 'todos') {
+          switch (filter) {
+            case 'vigentes':
+              filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
+              break;
+            case 'porVencer':
+              filtered = filtered.filter((m) => {
+                const days = getDaysUntilExpiry(m.vencimiento);
+                return days >= 0 && days <= 30;
+              });
+              break;
+            case 'vencidos':
+              filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
+              break;
+          }
+        }
+
+        setFilteredActivos(filtered);
+      } catch (error) {
+        if (!error.isAbort) {
+          console.error('Error cargando activos:', error);
+          Alert.alert('Error', 'No se pudo conectar con el servidor.');
+        }
+      } finally {
+        isLoadingRef.current = false;
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [filter]
+  ); // Dependencia SOLO de filter, no de searchTerm
+
+  // ── Cargar inactivos con paginación (manteniendo lógica original) ──
   const cargarInactivos = async (reset = false) => {
     if (cargandoInactivos) return;
     if (!reset && !hayMasInactivos) return;
+
     setCargandoInactivos(true);
     try {
-      let q;
+      let result;
       if (reset) {
-        q = query(
-          collection(db, 'medicamentos'),
-          where('activo', '==', false),
-          orderBy('nombre', 'asc'),
-          limit(50)
-        );
+        result = await pb.collection('medicamentos').getList(1, 50, {
+          filter: 'activo = false',
+          sort: 'nombre',
+          requestKey: null,
+        });
+        setUltimoDocInactivos(result.items[result.items.length - 1]);
+        setInactivosVisibles(result.items);
       } else {
-        q = query(
-          collection(db, 'medicamentos'),
-          where('activo', '==', false),
-          orderBy('nombre', 'asc'),
-          limit(50),
-          startAfter(ultimoDocInactivos)
-        );
+        result = await pb.collection('medicamentos').getList(1, 50, {
+          filter: 'activo = false',
+          sort: 'nombre',
+          requestKey: null,
+        });
+        setInactivosVisibles((prev) => [...prev, ...result.items]);
       }
-      const snapshot = await getDocs(q);
-      const nuevos = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      if (reset) setInactivosVisibles(nuevos);
-      else setInactivosVisibles((prev) => [...prev, ...nuevos]);
-      setUltimoDocInactivos(snapshot.docs[snapshot.docs.length - 1]);
-      setHayMasInactivos(snapshot.docs.length === 50);
+      setHayMasInactivos(result.items.length === 50);
     } catch (error) {
-      console.error('Error cargando inactivos:', error);
-      Alert.alert('Error', 'No se pudieron cargar los medicamentos inactivos');
+      if (!error.isAbort) {
+        console.error('Error cargando inactivos:', error);
+      }
     } finally {
       setCargandoInactivos(false);
     }
   };
 
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    if (showInactivos) cargarInactivos(true);
-  }, [showInactivos]);
+  // ── MEJORA 5: useFocusEffect sin depender de search ──
+  useFocusEffect(
+    useCallback(() => {
+      console.log('🔄 Recargando inventario por foco...');
+      cargarActivos();
+      if (showInactivos) {
+        cargarInactivos(true);
+      }
+    }, [cargarActivos, showInactivos])
+  );
 
-  // ── Filtros ──────────────────────────────────────────────
-  const getFilteredMeds = () => {
-    let filtered = [...medicamentosActivos];
-    if (searchTerm) {
-      const searchNorm = normalizeText(searchTerm);
+  // Mantener carga inicial
+  useEffect(() => {
+    cargarActivos();
+    if (showInactivos) {
+      cargarInactivos(true);
+    }
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await cargarActivos(true);
+    if (showInactivos) {
+      await cargarInactivos(true);
+    }
+    setRefreshing(false);
+  }, [cargarActivos, showInactivos]);
+
+  // ── MEJORA 4: Búsqueda LOCAL sin recargar BD ──
+  const handleSearch = (text) => {
+    setSearchTerm(text);
+    searchTermRef.current = text; // Guardar para usar después de recargas
+
+    if (!text.trim()) {
+      // Sin búsqueda: aplicar solo el filtro de estado
+      let filtered = [...activos];
+      switch (filter) {
+        case 'vigentes':
+          filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
+          break;
+        case 'porVencer':
+          filtered = filtered.filter((m) => {
+            const days = getDaysUntilExpiry(m.vencimiento);
+            return days >= 0 && days <= 30;
+          });
+          break;
+        case 'vencidos':
+          filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
+          break;
+      }
+      setFilteredActivos(filtered);
+    } else {
+      // Con búsqueda: filtrar localmente sobre activos
+      const searchNorm = normalizeText(text);
+      let filtered = activos.filter(
+        (m) =>
+          normalizeText(m.nombre).includes(searchNorm) ||
+          normalizeText(m.presentacion || '').includes(searchNorm) ||
+          normalizeText(m.categoria || '').includes(searchNorm) ||
+          normalizeText(m.ubicacion || '').includes(searchNorm)
+      );
+
+      // Aplicar filtro de estado después de búsqueda
+      switch (filter) {
+        case 'vigentes':
+          filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
+          break;
+        case 'porVencer':
+          filtered = filtered.filter((m) => {
+            const days = getDaysUntilExpiry(m.vencimiento);
+            return days >= 0 && days <= 30;
+          });
+          break;
+        case 'vencidos':
+          filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
+          break;
+      }
+      setFilteredActivos(filtered);
+    }
+  };
+
+  // ── Manejar cambio de filtro (recarga solo si cambia) ──
+  const handleFilterChange = (newFilter) => {
+    setFilter(newFilter);
+    // El filtro se aplicará cuando cargarActivos se ejecute de nuevo
+    // Pero para respuesta inmediata, aplicamos localmente:
+    let filtered = [...activos];
+
+    if (searchTermRef.current.trim()) {
+      const searchNorm = normalizeText(searchTermRef.current);
       filtered = filtered.filter(
         (m) =>
           normalizeText(m.nombre).includes(searchNorm) ||
@@ -226,7 +345,8 @@ export default function InventoryScreen({ user }) {
           normalizeText(m.ubicacion || '').includes(searchNorm)
       );
     }
-    switch (filter) {
+
+    switch (newFilter) {
       case 'vigentes':
         filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
         break;
@@ -240,9 +360,10 @@ export default function InventoryScreen({ user }) {
         filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
         break;
     }
-    return filtered;
+    setFilteredActivos(filtered);
   };
 
+  // ── Filtros (manteniendo lógica original) ──
   const getFilteredInactivos = () => {
     if (!searchTerm.trim()) return inactivosVisibles;
     const searchNorm = normalizeText(searchTerm);
@@ -269,116 +390,9 @@ export default function InventoryScreen({ user }) {
     }
   };
 
-  const getUserName = () => {
-    return user?.nombre || user?.email?.split('@')[0] || 'usuario';
-  };
-
-  // ── EDITAR MEDICAMENTO ────────────────────────────────────
-  const openEditModal = (med) => {
-    setCurrentEditMed(med);
-    setEditForm({
-      nombre: med.nombre || '',
-      presentacion: med.presentacion || '',
-      categoria: med.categoria || '',
-      cantidad: med.cantidad ? med.cantidad.toString() : '',
-      vencimiento: med.vencimiento || '',
-      ubicacion: med.ubicacion || '',
-    });
-    setEditModalVisible(true);
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editForm.nombre.trim()) {
-      Alert.alert('Error', 'El nombre es obligatorio');
-      return;
-    }
-    if (!editForm.cantidad || parseInt(editForm.cantidad) <= 0) {
-      Alert.alert('Error', 'Ingresa una cantidad válida');
-      return;
-    }
-    if (!editForm.vencimiento) {
-      Alert.alert('Error', 'La fecha de vencimiento es obligatoria');
-      return;
-    }
-
-    try {
-      const medRef = doc(db, 'medicamentos', currentEditMed.id);
-      await updateDoc(medRef, {
-        nombre: editForm.nombre.trim(),
-        presentacion: editForm.presentacion.trim() || 'No especificada',
-        categoria: editForm.categoria.trim() || 'Sin categoría',
-        cantidad: parseInt(editForm.cantidad),
-        vencimiento: editForm.vencimiento,
-        ubicacion: editForm.ubicacion.trim() || '',
-        fechaEdicion: new Date().toISOString(),
-        editadoPor: getUserName(),
-      });
-      Alert.alert('Éxito', 'Medicamento actualizado correctamente');
-      setEditModalVisible(false);
-      setCurrentEditMed(null);
-    } catch (error) {
-      console.error('Error editando:', error);
-      Alert.alert('Error', 'No se pudo actualizar el medicamento');
-    }
-  };
-
-  // ── DUPLICAR MEDICAMENTO ──────────────────────────────────
-  const openDuplicateModal = (med) => {
-    setCurrentDuplicateMed(med);
-    setDuplicateForm({
-      nombre: med.nombre || '',
-      presentacion: med.presentacion || '',
-      categoria: med.categoria || '',
-      ubicacion: med.ubicacion || '',
-      cantidad: '',
-      vencimiento: '',
-    });
-    setDuplicateModalVisible(true);
-  };
-
-  const handleSaveDuplicate = async () => {
-    if (!duplicateForm.nombre.trim()) {
-      Alert.alert('Error', 'El nombre es obligatorio');
-      return;
-    }
-    if (!duplicateForm.cantidad || parseInt(duplicateForm.cantidad) <= 0) {
-      Alert.alert('Error', 'Ingresa una cantidad válida');
-      return;
-    }
-    if (!duplicateForm.vencimiento) {
-      Alert.alert('Error', 'La fecha de vencimiento es obligatoria');
-      return;
-    }
-
-    try {
-      const newMedData = {
-        nombre: duplicateForm.nombre.trim(),
-        presentacion: duplicateForm.presentacion.trim() || 'No especificada',
-        categoria: duplicateForm.categoria.trim() || 'Sin categoría',
-        cantidad: parseInt(duplicateForm.cantidad),
-        vencimiento: duplicateForm.vencimiento,
-        ubicacion: duplicateForm.ubicacion.trim() || '',
-        imagen: currentDuplicateMed.imagen || null,
-        activo: true,
-        fechaRegistro: new Date().toISOString(),
-        userName: getUserName(),
-        userId: getUserName(),
-        esDuplicado: true,
-        duplicadoDe: currentDuplicateMed.id,
-      };
-      await addDoc(collection(db, 'medicamentos'), newMedData);
-      Alert.alert('Éxito', 'Medicamento duplicado correctamente');
-      setDuplicateModalVisible(false);
-      setCurrentDuplicateMed(null);
-    } catch (error) {
-      console.error('Error duplicando:', error);
-      Alert.alert('Error', 'No se pudo duplicar el medicamento');
-    }
-  };
-
-  // ── PDF ──────────────────────────────────────────────────
+  // ── PDF (manteniendo lógica original) ──
   const generatePDF = async () => {
-    const medicamentosParaPDF = showInactivos ? getFilteredInactivos() : getFilteredMeds();
+    const medicamentosParaPDF = showInactivos ? getFilteredInactivos() : filteredActivos;
     const titulo =
       showInactivos && searchTerm
         ? `LISTADO DE MEDICAMENTOS INACTIVOS - BÚSQUEDA: "${searchTerm}"`
@@ -435,7 +449,7 @@ export default function InventoryScreen({ user }) {
         <div class="stats"><div class="stats-text">Total: ${medicamentosParaPDF.length} medicamentos</div></div>
         <table><thead><tr><th>#</th><th>Nombre</th><th>Presentación</th><th>Categoría</th><th>Stock</th><th>Vencimiento</th><th>Ubicación</th><th>Estado</th></tr></thead>
         <tbody>${tableRows}</tbody></table>
-        <div class="footer"><div>Farmacia Iglesia - Sistema de Gestión de Inventario</div></div>
+        <div class="footer"><div>FarmaRincón - Sistema de Gestión de Inventario</div></div>
         </body></html>`;
       const { uri } = await Print.printToFileAsync({ html });
       if (await Sharing.isAvailableAsync()) {
@@ -454,30 +468,27 @@ export default function InventoryScreen({ user }) {
     }
   };
 
-  // ── Acciones de medicamentos ─────────────────────────────
+  // ── Acciones de medicamentos (actualizadas para usar cargarActivos) ──
   const handleSoftDelete = async (medId, medName) => {
-    Alert.alert(
-      'Desactivar Medicamento',
-      `¿Estás seguro de desactivar ${medName}?\n\nEl medicamento dejará de estar disponible para nuevos pedidos, pero se conservará el historial.`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Desactivar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await updateDoc(doc(db, 'medicamentos', medId), {
-                activo: false,
-                fechaBaja: new Date().toISOString(),
-              });
-              Alert.alert('Éxito', 'Medicamento desactivado');
-            } catch {
-              Alert.alert('Error', 'No se pudo desactivar');
-            }
-          },
+    Alert.alert('Desactivar Medicamento', `¿Estás seguro de desactivar ${medName}?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Desactivar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await pb.collection('medicamentos').update(medId, {
+              activo: false,
+              fechaBaja: new Date().toISOString(),
+            });
+            await cargarActivos(); // Recargar después de desactivar
+            Alert.alert('Éxito', 'Medicamento desactivado');
+          } catch {
+            Alert.alert('Error', 'No se pudo desactivar');
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   const handleReactivar = async (medId, medName) => {
@@ -487,7 +498,14 @@ export default function InventoryScreen({ user }) {
         text: 'Reactivar',
         onPress: async () => {
           try {
-            await updateDoc(doc(db, 'medicamentos', medId), { activo: true, fechaBaja: null });
+            await pb.collection('medicamentos').update(medId, {
+              activo: true,
+              fechaBaja: null,
+            });
+            await cargarActivos(); // Recargar después de reactivar
+            if (showInactivos) {
+              await cargarInactivos(true);
+            }
             Alert.alert('Éxito', 'Medicamento reactivado');
           } catch {
             Alert.alert('Error', 'No se pudo reactivar');
@@ -497,7 +515,108 @@ export default function InventoryScreen({ user }) {
     ]);
   };
 
-  // ── Modal de imagen ──────────────────────────────────────
+  // ── EDITAR MEDICAMENTO ──
+  const openEditModal = (med) => {
+    setCurrentEditMed(med);
+    setEditForm({
+      nombre: med.nombre || '',
+      presentacion: med.presentacion || '',
+      categoria: med.categoria || '',
+      cantidad: med.cantidad ? med.cantidad.toString() : '',
+      vencimiento: med.vencimiento || '',
+      ubicacion: med.ubicacion || '',
+    });
+    setEditModalVisible(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editForm.nombre.trim()) {
+      Alert.alert('Error', 'El nombre es obligatorio');
+      return;
+    }
+    if (!editForm.cantidad || parseInt(editForm.cantidad) <= 0) {
+      Alert.alert('Error', 'Ingresa una cantidad válida');
+      return;
+    }
+    if (!editForm.vencimiento) {
+      Alert.alert('Error', 'La fecha de vencimiento es obligatoria');
+      return;
+    }
+
+    try {
+      await pb.collection('medicamentos').update(currentEditMed.id, {
+        nombre: editForm.nombre.trim(),
+        presentacion: editForm.presentacion.trim() || 'No especificada',
+        categoria: editForm.categoria.trim() || 'Sin categoría',
+        cantidad: parseInt(editForm.cantidad),
+        vencimiento: editForm.vencimiento,
+        ubicacion: editForm.ubicacion.trim() || '',
+        fechaEdicion: new Date().toISOString(),
+        editadoPor: getUserName(),
+      });
+      await cargarActivos(); // Recargar después de editar
+      Alert.alert('Éxito', 'Medicamento actualizado correctamente');
+      setEditModalVisible(false);
+    } catch (error) {
+      console.error('Error editando:', error);
+      Alert.alert('Error', 'No se pudo actualizar el medicamento');
+    }
+  };
+
+  // ── DUPLICAR MEDICAMENTO ──
+  const openDuplicateModal = (med) => {
+    setCurrentDuplicateMed(med);
+    setDuplicateForm({
+      nombre: med.nombre || '',
+      presentacion: med.presentacion || '',
+      categoria: med.categoria || '',
+      ubicacion: med.ubicacion || '',
+      cantidad: '',
+      vencimiento: '',
+    });
+    setDuplicateModalVisible(true);
+  };
+
+  const handleSaveDuplicate = async () => {
+    if (!duplicateForm.nombre.trim()) {
+      Alert.alert('Error', 'El nombre es obligatorio');
+      return;
+    }
+    if (!duplicateForm.cantidad || parseInt(duplicateForm.cantidad) <= 0) {
+      Alert.alert('Error', 'Ingresa una cantidad válida');
+      return;
+    }
+    if (!duplicateForm.vencimiento) {
+      Alert.alert('Error', 'La fecha de vencimiento es obligatoria');
+      return;
+    }
+
+    try {
+      await pb.collection('medicamentos').create({
+        nombre: duplicateForm.nombre.trim(),
+        presentacion: duplicateForm.presentacion.trim() || 'No especificada',
+        categoria: duplicateForm.categoria.trim() || 'Sin categoría',
+        cantidad: parseInt(duplicateForm.cantidad),
+        vencimiento: duplicateForm.vencimiento,
+        ubicacion: duplicateForm.ubicacion.trim() || '',
+        imagen: currentDuplicateMed.imagen || null,
+        activo: true,
+        fechaRegistro: new Date().toISOString(),
+        userName: getUserName(),
+        userId: getUserName(),
+        esDuplicado: true,
+        duplicadoDe: currentDuplicateMed.id,
+      });
+      await cargarActivos(); // Recargar después de duplicar
+      Alert.alert('Éxito', 'Medicamento duplicado correctamente');
+      setDuplicateModalVisible(false);
+    } catch (error) {
+      console.error('Error duplicando:', error);
+      Alert.alert('Error', 'No se pudo duplicar el medicamento');
+    }
+  };
+
+  // ── Modal de imagen (manteniendo igual) ──
   const openImageModal = (imageBase64, medName) => {
     if (!imageBase64) return;
     resetZoom();
@@ -512,7 +631,6 @@ export default function InventoryScreen({ user }) {
     setModalVisible(false);
   };
 
-  // ── Compartir imagen ─────────────────────────────────────
   const shareImage = async () => {
     if (!selectedImage) return;
     try {
@@ -536,7 +654,7 @@ export default function InventoryScreen({ user }) {
     }
   };
 
-  // ── Status helpers ───────────────────────────────────────
+  // ── Status helpers ──
   const getStatusColor = (fecha) => {
     const days = getDaysUntilExpiry(fecha);
     if (days < 0) return styles.vencido;
@@ -552,9 +670,9 @@ export default function InventoryScreen({ user }) {
   };
 
   const userIsAdmin = isAdmin(user);
-  const filteredMeds = getFilteredMeds();
+  const medicamentosActivos = filteredActivos; // Para compatibilidad con el resto del código
 
-  if (cargandoInicial) {
+  if (loading && activos.length === 0) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size={50} color="#7C3AED" />
@@ -563,7 +681,7 @@ export default function InventoryScreen({ user }) {
     );
   }
 
-  // ── Componente de tarjeta de medicamento ─────────────────
+  // ── Componente de tarjeta de medicamento (MANTENIDO IGUAL) ──
   const MedCard = ({ med, isInactivo = false }) => (
     <View
       key={med.id}
@@ -653,7 +771,7 @@ export default function InventoryScreen({ user }) {
     </View>
   );
 
-  // ── Render ───────────────────────────────────────────────
+  // ── Render (MANTENIDO IGUAL EN ESTRUCTURA, solo cambiando las funciones de filtro) ──
   return (
     <View style={styles.container}>
       {/* Header con búsqueda */}
@@ -665,10 +783,10 @@ export default function InventoryScreen({ user }) {
             placeholder="Buscar medicamento..."
             placeholderTextColor="#9CA3AF"
             value={searchTerm}
-            onChangeText={setSearchTerm}
+            onChangeText={handleSearch} // ✅ Ahora usa handleSearch optimizado
           />
           {searchTerm !== '' && (
-            <TouchableOpacity onPress={() => setSearchTerm('')}>
+            <TouchableOpacity onPress={() => handleSearch('')}>
               <X color="#9CA3AF" size={20} />
             </TouchableOpacity>
           )}
@@ -703,7 +821,7 @@ export default function InventoryScreen({ user }) {
         <View style={styles.filtersContainer}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {[
-              { key: 'todos', label: `Todos (${medicamentosActivos.length})` },
+              { key: 'todos', label: `Todos (${activos.length})` },
               { key: 'vigentes', label: 'Vigentes' },
               { key: 'porVencer', label: 'Por vencer' },
               { key: 'vencidos', label: 'Vencidos' },
@@ -711,7 +829,7 @@ export default function InventoryScreen({ user }) {
               <TouchableOpacity
                 key={f.key}
                 style={[styles.filterChip, filter === f.key && styles.filterChipActive]}
-                onPress={() => setFilter(f.key)}
+                onPress={() => handleFilterChange(f.key)} // ✅ Usa handleFilterChange optimizado
               >
                 <Text
                   style={[styles.filterChipText, filter === f.key && styles.filterChipTextActive]}
@@ -730,7 +848,7 @@ export default function InventoryScreen({ user }) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         {/* Activos */}
-        {!showInactivos && filteredMeds.length === 0 && (
+        {!showInactivos && medicamentosActivos.length === 0 && (
           <View style={styles.emptyContainer}>
             <Package color="#D1D5DB" size={64} />
             <Text style={styles.emptyTitle}>No hay medicamentos</Text>
@@ -742,10 +860,10 @@ export default function InventoryScreen({ user }) {
           </View>
         )}
 
-        {!showInactivos && filteredMeds.length > 0 && (
+        {!showInactivos && medicamentosActivos.length > 0 && (
           <>
             <View style={styles.resultsHeader}>
-              <Text style={styles.resultsText}>{filteredMeds.length} encontrados</Text>
+              <Text style={styles.resultsText}>{medicamentosActivos.length} encontrados</Text>
               <TouchableOpacity
                 style={styles.pdfButton}
                 onPress={generatePDF}
@@ -755,7 +873,7 @@ export default function InventoryScreen({ user }) {
                 <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
               </TouchableOpacity>
             </View>
-            {filteredMeds.map((med) => (
+            {medicamentosActivos.map((med) => (
               <MedCard key={med.id} med={med} />
             ))}
           </>
@@ -814,28 +932,29 @@ export default function InventoryScreen({ user }) {
         )}
       </ScrollView>
 
-      {/* Modal de imagen con zoom */}
+      {/* Modal de imagen con zoom y botones flotantes */}
       <Modal
         visible={modalVisible}
-        transparent={true}
-        animationType="fade"
+        transparent={false}
+        animationType="slide"
         onRequestClose={closeImageModal}
       >
         <GestureHandlerRootView style={{ flex: 1 }}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle} numberOfLines={1}>
+              {selectedMedName}
+            </Text>
+          </View>
           <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle} numberOfLines={1}>
-                {selectedMedName}
-              </Text>
-              <View style={styles.modalActions}>
-                <TouchableOpacity onPress={shareImage} style={styles.modalActionBtn}>
-                  <Share2 color="white" size={22} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={closeImageModal} style={styles.modalActionBtn}>
-                  <X color="white" size={24} />
-                </TouchableOpacity>
-              </View>
-            </View>
+            {/* Botón de cerrar (X) en la esquina superior derecha */}
+            <TouchableOpacity style={styles.modalCloseButton} onPress={closeImageModal}>
+              <X color="white" size={28} />
+            </TouchableOpacity>
+
+            {/* Botón de compartir en la esquina superior izquierda */}
+            <TouchableOpacity style={styles.modalShareButton} onPress={shareImage}>
+              <Share2 color="white" size={24} />
+            </TouchableOpacity>
 
             <GestureDetector gesture={composed}>
               <Animated.View style={[styles.modalImageWrapper, { transform: [{ scale }] }]}>
@@ -849,7 +968,6 @@ export default function InventoryScreen({ user }) {
                 )}
               </Animated.View>
             </GestureDetector>
-
             <Text style={styles.modalHint}>Pellizca para zoom · Doble toque para resetear</Text>
           </View>
         </GestureHandlerRootView>
@@ -1216,13 +1334,13 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 8,
   },
-  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.97)' },
+  modalContainer: { flex: 1, backgroundColor: 'rgba(173, 20, 196, 0.14)' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 52,
+    paddingTop: 50,
     paddingBottom: 12,
   },
   modalTitle: { color: 'white', fontSize: 16, fontWeight: 'bold', flex: 1, marginRight: 12 },
@@ -1236,7 +1354,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingBottom: 24,
   },
-  // Estilos para modales de editar/duplicar
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1251,9 +1368,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   modalHeader: {
+    backgroundColor: '#cfbef9',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     padding: 20,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
@@ -1280,4 +1398,32 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   saveButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  modalCloseButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 20,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 30,
+    padding: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalShareButton: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    zIndex: 20,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 30,
+    padding: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
 });

@@ -1,5 +1,5 @@
 // src/screens/EntregasScreen.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,18 +11,8 @@ import {
   Modal,
   TextInput,
   FlatList,
+  RefreshControl,
 } from 'react-native';
-import { db } from '../../firebaseConfig';
-import {
-  collection,
-  onSnapshot,
-  query,
-  orderBy,
-  where,
-  doc,
-  runTransaction,
-  getDocs,
-} from 'firebase/firestore';
 import {
   MinusCircle,
   Plus,
@@ -38,6 +28,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react-native';
+import { pb } from '../services/PocketBaseConfig';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { sendLocalNotification } from '../services/NotificationService';
 
@@ -45,17 +36,16 @@ export default function EntregasScreen({ user }) {
   const [entregas, setEntregas] = useState([]);
   const [medicamentos, setMedicamentos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [showFormModal, setShowFormModal] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [filter, setFilter] = useState('todas');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Estado del formulario de nueva entrega
   const [destino, setDestino] = useState('');
   const [notas, setNotas] = useState('');
   const [medicamentosSeleccionados, setMedicamentosSeleccionados] = useState([]);
 
-  // Estado para el modal de selección de medicamentos (MULTIPLE)
   const [showSelectMedModal, setShowSelectMedModal] = useState(false);
   const [busqueda, setBusqueda] = useState('');
   const [medicamentosFiltrados, setMedicamentosFiltrados] = useState([]);
@@ -63,49 +53,85 @@ export default function EntregasScreen({ user }) {
   const [cantidadesTemp, setCantidadesTemp] = useState({});
   const [procesando, setProcesando] = useState(false);
 
-  const getUserName = () => {
-    return user?.nombre || user?.email?.split('@')[0] || 'usuario';
-  };
+  // Refs para evitar cargas duplicadas y manejar suscripciones
+  const isLoadingRef = useRef(false);
+  const subscriptionsRef = useRef([]);
 
-  useEffect(() => {
-    cargarEntregas();
-  }, []);
+  const getUserName = () => user?.nombre || 'usuario';
 
-  useEffect(() => {
-    const qMedicamentos = query(
-      collection(db, 'medicamentos'),
-      where('activo', '==', true),
-      orderBy('nombre', 'asc')
-    );
-    const unsubscribeMedicamentos = onSnapshot(qMedicamentos, (snapshot) => {
-      const docs = [];
-      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
-      console.log('📦 Medicamentos cargados:', docs.length); // 👈 Agrega este log
-      setMedicamentos(docs);
-      setLoading(false);
-    });
-    return () => unsubscribeMedicamentos();
-  }, []);
+  // ── Función de carga principal ──
+  const loadData = useCallback(async (isRefresh = false) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
 
-  const cargarEntregas = async () => {
-    setLoading(true);
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+
     try {
-      const q = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        setEntregas(docs);
-        setLoading(false);
-      });
+      const [entregasResult, medicamentosResult] = await Promise.all([
+        pb.collection('entregas').getList(1, 100, { sort: '-fechaCreacion', requestKey: null }),
+        pb
+          .collection('medicamentos')
+          .getList(1, 500, { filter: 'activo = true', sort: 'nombre', requestKey: null }),
+      ]);
+      setEntregas(entregasResult.items);
+      setMedicamentos(medicamentosResult.items);
     } catch (error) {
-      console.error('Error cargando entregas:', error);
+      if (!error.isAbort) {
+        console.error('Error cargando datos:', error);
+        Alert.alert('Error', 'No se pudieron cargar los datos');
+      }
     } finally {
+      isLoadingRef.current = false;
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, []);
+
+  // ── Realtime subscriptions ──
+  const setupRealtimeSubscriptions = useCallback(() => {
+    // Limpiar suscripciones anteriores
+    subscriptionsRef.current.forEach((unsub) => unsub?.());
+    subscriptionsRef.current = [];
+
+    // Suscribirse a cambios en entregas
+    const entregasUnsub = pb.collection('entregas').subscribe('*', (e) => {
+      console.log('🔄 Cambio en entregas:', e.action, e.record?.id);
+
+      if (e.action === 'create') {
+        setEntregas((prev) => [e.record, ...prev]);
+      } else if (e.action === 'update') {
+        setEntregas((prev) => prev.map((e2) => (e2.id === e.record.id ? e.record : e2)));
+      } else if (e.action === 'delete') {
+        setEntregas((prev) => prev.filter((e2) => e2.id !== e.record.id));
+      }
+    });
+
+    // Suscribirse a cambios en medicamentos (para stock actualizado)
+    const medicamentosUnsub = pb.collection('medicamentos').subscribe('*', (e) => {
+      console.log('🔄 Cambio en medicamentos:', e.action);
+      if (e.action === 'update' || e.action === 'create') {
+        loadData();
+      }
+    });
+
+    subscriptionsRef.current = [entregasUnsub, medicamentosUnsub];
+  }, [loadData]);
+
+  // Cargar datos iniciales y setup realtime
+  useEffect(() => {
+    loadData();
+    setupRealtimeSubscriptions();
+
+    return () => {
+      subscriptionsRef.current.forEach((unsub) => unsub?.());
+    };
+  }, [loadData, setupRealtimeSubscriptions]);
+
+  const onRefresh = useCallback(() => loadData(true), [loadData]);
 
   const getFilteredEntregas = () => {
     let filtered = [...entregas];
-
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase().trim();
       filtered = filtered.filter(
@@ -114,13 +140,11 @@ export default function EntregasScreen({ user }) {
           e.items?.some((item) => item.nombre?.toLowerCase().includes(term))
       );
     }
-
     if (filter === 'abiertas') {
       filtered = filtered.filter((e) => e.estado === 'abierta' && !e.pedidoId);
     } else if (filter === 'cerradas') {
       filtered = filtered.filter((e) => e.estado === 'cerrada' || e.pedidoId !== null);
     }
-
     return filtered;
   };
 
@@ -140,31 +164,23 @@ export default function EntregasScreen({ user }) {
   };
 
   const actualizarCantidadTemp = (medicamentoId, texto) => {
-    setCantidadesTemp((prev) => ({
-      ...prev,
-      [medicamentoId]: texto,
-    }));
+    setCantidadesTemp((prev) => ({ ...prev, [medicamentoId]: texto }));
   };
 
   const agregarASeleccionTemp = (medicamento) => {
     const cantidad = parseInt(cantidadesTemp[medicamento.id]);
-
     if (!cantidad || cantidad <= 0) {
       Alert.alert('Error', 'Ingresa una cantidad válida');
       return;
     }
-
-    const yaSeleccionado = seleccionTemporalMed.find((s) => s.medicamentoId === medicamento.id);
-    if (yaSeleccionado) {
+    if (seleccionTemporalMed.find((s) => s.medicamentoId === medicamento.id)) {
       Alert.alert('Error', 'Este medicamento ya está en la lista.');
       return;
     }
-
     if (cantidad > medicamento.cantidad) {
       Alert.alert('Error', `Stock insuficiente. Disponible: ${medicamento.cantidad} unidades`);
       return;
     }
-
     const nuevoItem = {
       id: Date.now().toString() + Math.random(),
       medicamentoId: medicamento.id,
@@ -174,7 +190,6 @@ export default function EntregasScreen({ user }) {
       ubicacion: medicamento.ubicacion || '',
       vencimiento: medicamento.vencimiento,
     };
-
     setSeleccionTemporalMed([...seleccionTemporalMed, nuevoItem]);
     setCantidadesTemp((prev) => {
       const newCantidades = { ...prev };
@@ -202,33 +217,14 @@ export default function EntregasScreen({ user }) {
     setMedicamentosSeleccionados(medicamentosSeleccionados.filter((m) => m.id !== id));
   };
 
-  const recargarEntregas = async () => {
-    try {
-      const q = query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'));
-      const snapshot = await getDocs(q);
-      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      setEntregas(docs);
-      console.log('✅ Entregas recargadas:', docs.length);
-    } catch (error) {
-      console.error('Error recargando entregas:', error);
-    }
-  };
-
   const verificarEntregaExistente = async () => {
     if (!destino.trim()) return null;
-
     try {
-      const q = query(
-        collection(db, 'entregas'),
-        where('destino', '==', destino.trim()),
-        where('pedidoId', '==', null),
-        where('estado', '==', 'abierta')
-      );
-      const snapshot = await getDocs(q);
-      if (!snapshot.empty) {
-        return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
-      }
-      return null;
+      const result = await pb.collection('entregas').getList(1, 1, {
+        filter: `destino = "${destino.trim()}" && pedidoId = null && estado = "abierta"`,
+        requestKey: null,
+      });
+      return result.items.length > 0 ? result.items[0] : null;
     } catch (error) {
       console.error('Error:', error);
       return null;
@@ -244,12 +240,9 @@ export default function EntregasScreen({ user }) {
       Alert.alert('Error', 'Debes agregar al menos un medicamento');
       return;
     }
-
     setProcesando(true);
-
     try {
       const entregaExistente = await verificarEntregaExistente();
-
       if (entregaExistente) {
         Alert.alert(
           'Entrega existente',
@@ -275,71 +268,50 @@ export default function EntregasScreen({ user }) {
 
   const crearNuevaEntrega = async () => {
     try {
-      await runTransaction(db, async (transaction) => {
-        const medicamentosData = [];
-        for (const med of medicamentosSeleccionados) {
-          const medRef = doc(db, 'medicamentos', med.medicamentoId);
-          const medDoc = await transaction.get(medRef);
-          if (!medDoc.exists()) {
-            throw new Error(`Medicamento ${med.nombre} no existe`);
-          }
-          medicamentosData.push({
-            ref: medRef,
-            stockActual: medDoc.data().cantidad,
-            cantidadRequerida: med.cantidad,
-            nombre: med.nombre,
-          });
+      for (const med of medicamentosSeleccionados) {
+        const medicamentoActual = medicamentos.find((m) => m.id === med.medicamentoId);
+        if (!medicamentoActual || med.cantidad > medicamentoActual.cantidad) {
+          Alert.alert('Error', `Stock insuficiente para ${med.nombre}`);
+          setProcesando(false);
+          return;
         }
+      }
 
-        for (const item of medicamentosData) {
-          if (item.cantidadRequerida > item.stockActual) {
-            throw new Error(`Stock insuficiente para ${item.nombre}`);
-          }
-        }
+      const items = medicamentosSeleccionados.map((med) => ({
+        medicamentoId: med.medicamentoId,
+        nombre: med.nombre,
+        presentacion: med.presentacion,
+        cantidad: med.cantidad,
+        ubicacion: med.ubicacion || '',
+        vencimiento: med.vencimiento,
+        fechaAgregado: new Date().toISOString(),
+      }));
 
-        const entregaRef = doc(collection(db, 'entregas'));
-        const items = medicamentosSeleccionados.map((med) => ({
-          medicamentoId: med.medicamentoId,
-          nombre: med.nombre,
-          presentacion: med.presentacion,
-          cantidad: med.cantidad,
-          ubicacion: med.ubicacion || '',
-          vencimiento: med.vencimiento,
-          fechaAgregado: new Date().toISOString(),
-        }));
-
-        transaction.set(entregaRef, {
-          destino: destino.trim(),
-          fechaCreacion: new Date().toISOString(),
-          pedidoId: null,
-          items: items,
-          estado: 'abierta',
-          creadoPor: getUserName(),
-          notas: notas.trim() || '',
-          ultimaModificacion: new Date().toISOString(),
-        });
-
-        for (const item of medicamentosData) {
-          const nuevaCantidad = item.stockActual - item.cantidadRequerida;
-          transaction.update(item.ref, { cantidad: nuevaCantidad });
-          if (nuevaCantidad <= 10) {
-            // 👈 Verificar stock bajo después de actualizar
-            await sendLocalNotification(
-              '📦 Stock bajo',
-              `${item.nombre} tiene solo ${nuevaCantidad} unidades restantes`
-            );
-          }
-        }
+      await pb.collection('entregas').create({
+        destino: destino.trim(),
+        fechaCreacion: new Date().toISOString(),
+        pedidoId: null,
+        items: items,
+        estado: 'abierta',
+        creadoPor: getUserName(),
+        notas: notas.trim() || '',
+        ultimaModificacion: new Date().toISOString(),
       });
 
+      for (const med of medicamentosSeleccionados) {
+        const medicamentoActual = medicamentos.find((m) => m.id === med.medicamentoId);
+        const nuevaCantidad = medicamentoActual.cantidad - med.cantidad;
+        await pb.collection('medicamentos').update(med.medicamentoId, { cantidad: nuevaCantidad });
+        if (nuevaCantidad <= 10) {
+          await sendLocalNotification(
+            '📦 Stock bajo',
+            `${med.nombre} tiene solo ${nuevaCantidad} unidades restantes`
+          );
+        }
+      }
+
       Alert.alert('Éxito', 'Entrega registrada correctamente', [
-        {
-          text: 'OK',
-          onPress: () => {
-            resetForm();
-            recargarEntregas(); // 👈 Esto actualiza la lista
-          },
-        },
+        { text: 'OK', onPress: resetForm },
       ]);
     } catch (error) {
       console.error('Error:', error);
@@ -350,67 +322,48 @@ export default function EntregasScreen({ user }) {
 
   const agregarAEntregaExistente = async (entrega) => {
     try {
-      await runTransaction(db, async (transaction) => {
-        const entregaRef = doc(db, 'entregas', entrega.id);
-        const entregaDoc = await transaction.get(entregaRef);
-        if (!entregaDoc.exists()) {
-          throw new Error('La entrega ya no existe');
+      for (const med of medicamentosSeleccionados) {
+        const medicamentoActual = medicamentos.find((m) => m.id === med.medicamentoId);
+        if (!medicamentoActual || med.cantidad > medicamentoActual.cantidad) {
+          Alert.alert('Error', `Stock insuficiente para ${med.nombre}`);
+          setProcesando(false);
+          return;
         }
+      }
 
-        const medicamentosData = [];
-        for (const med of medicamentosSeleccionados) {
-          const medRef = doc(db, 'medicamentos', med.medicamentoId);
-          const medDoc = await transaction.get(medRef);
-          if (!medDoc.exists()) {
-            throw new Error(`Medicamento ${med.nombre} no existe`);
-          }
-          medicamentosData.push({
-            ref: medRef,
-            stockActual: medDoc.data().cantidad,
-            cantidadRequerida: med.cantidad,
-            nombre: med.nombre,
+      const itemsActuales = entrega.items || [];
+      const nuevosItems = [...itemsActuales];
+
+      for (const nuevoMed of medicamentosSeleccionados) {
+        const existenteIndex = nuevosItems.findIndex(
+          (item) => item.medicamentoId === nuevoMed.medicamentoId
+        );
+        if (existenteIndex >= 0) {
+          nuevosItems[existenteIndex].cantidad += nuevoMed.cantidad;
+          nuevosItems[existenteIndex].fechaAgregado = new Date().toISOString();
+        } else {
+          nuevosItems.push({
+            medicamentoId: nuevoMed.medicamentoId,
+            nombre: nuevoMed.nombre,
+            presentacion: nuevoMed.presentacion,
+            cantidad: nuevoMed.cantidad,
+            ubicacion: nuevoMed.ubicacion,
+            vencimiento: nuevoMed.vencimiento,
+            fechaAgregado: new Date().toISOString(),
           });
         }
+      }
 
-        for (const item of medicamentosData) {
-          if (item.cantidadRequerida > item.stockActual) {
-            throw new Error(`Stock insuficiente para ${item.nombre}`);
-          }
-        }
-
-        const itemsActuales = entregaDoc.data().items || [];
-        const nuevosItems = [...itemsActuales];
-
-        for (const nuevoMed of medicamentosSeleccionados) {
-          const existenteIndex = nuevosItems.findIndex(
-            (item) => item.medicamentoId === nuevoMed.medicamentoId
-          );
-          if (existenteIndex >= 0) {
-            nuevosItems[existenteIndex].cantidad += nuevoMed.cantidad;
-            nuevosItems[existenteIndex].fechaAgregado = new Date().toISOString();
-          } else {
-            nuevosItems.push({
-              medicamentoId: nuevoMed.medicamentoId,
-              nombre: nuevoMed.nombre,
-              presentacion: nuevoMed.presentacion,
-              cantidad: nuevoMed.cantidad,
-              ubicacion: nuevoMed.ubicacion,
-              vencimiento: nuevoMed.vencimiento,
-              fechaAgregado: new Date().toISOString(),
-            });
-          }
-        }
-
-        transaction.update(entregaRef, {
-          items: nuevosItems,
-          ultimaModificacion: new Date().toISOString(),
-        });
-
-        for (const item of medicamentosData) {
-          const nuevaCantidad = item.stockActual - item.cantidadRequerida;
-          transaction.update(item.ref, { cantidad: nuevaCantidad });
-        }
+      await pb.collection('entregas').update(entrega.id, {
+        items: nuevosItems,
+        ultimaModificacion: new Date().toISOString(),
       });
+
+      for (const med of medicamentosSeleccionados) {
+        const medicamentoActual = medicamentos.find((m) => m.id === med.medicamentoId);
+        const nuevaCantidad = medicamentoActual.cantidad - med.cantidad;
+        await pb.collection('medicamentos').update(med.medicamentoId, { cantidad: nuevaCantidad });
+      }
 
       Alert.alert('Éxito', 'Medicamentos agregados a la entrega existente', [
         { text: 'OK', onPress: resetForm },
@@ -447,7 +400,6 @@ export default function EntregasScreen({ user }) {
 
   const totalUnidades = medicamentosSeleccionados.reduce((sum, m) => sum + m.cantidad, 0);
   const filteredEntregas = getFilteredEntregas();
-
   const totalEntregas = entregas.length;
   const abiertasCount = entregas.filter((e) => e.estado === 'abierta' && !e.pedidoId).length;
   const cerradasCount = entregas.filter(
@@ -518,7 +470,10 @@ export default function EntregasScreen({ user }) {
         </ScrollView>
       </View>
 
-      <ScrollView style={styles.content}>
+      <ScrollView
+        style={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
         {filteredEntregas.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Package color="#D1D5DB" size={64} />
@@ -561,7 +516,6 @@ export default function EntregasScreen({ user }) {
                     <ChevronDown size={20} color="#6B7280" />
                   )}
                 </TouchableOpacity>
-
                 {expandedId === entrega.id && (
                   <View style={styles.entregaDetails}>
                     <View style={styles.detailRow}>
@@ -576,7 +530,6 @@ export default function EntregasScreen({ user }) {
                         Creado por: {entrega.creadoPor || 'usuario'}
                       </Text>
                     </View>
-
                     <View style={styles.itemsContainer}>
                       <Text style={styles.itemsTitle}>Medicamentos entregados:</Text>
                       {entrega.items?.map((item, idx) => (
@@ -589,7 +542,6 @@ export default function EntregasScreen({ user }) {
                         </View>
                       ))}
                     </View>
-
                     {entrega.pedidoId ? (
                       <View style={styles.vinculadaContainer}>
                         <Text style={styles.vinculadaText}>✓ Vinculada al pedido</Text>
@@ -609,7 +561,7 @@ export default function EntregasScreen({ user }) {
         )}
       </ScrollView>
 
-      {/* Modal para nueva entrega */}
+      {/* Modales - mantienen el mismo código */}
       <Modal
         visible={showFormModal}
         animationType="slide"
@@ -624,7 +576,6 @@ export default function EntregasScreen({ user }) {
                 <X color="#6B7280" size={24} />
               </TouchableOpacity>
             </View>
-
             <ScrollView style={styles.modalBody}>
               <Text style={styles.label}>Destino *</Text>
               <TextInput
@@ -634,7 +585,6 @@ export default function EntregasScreen({ user }) {
                 value={destino}
                 onChangeText={setDestino}
               />
-
               <Text style={styles.label}>Notas (opcional)</Text>
               <TextInput
                 style={[styles.input, styles.textArea]}
@@ -644,7 +594,6 @@ export default function EntregasScreen({ user }) {
                 onChangeText={setNotas}
                 multiline
               />
-
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Medicamentos a entregar</Text>
                 <TouchableOpacity
@@ -661,7 +610,6 @@ export default function EntregasScreen({ user }) {
                   <Text style={styles.addMedButtonText}>Agregar</Text>
                 </TouchableOpacity>
               </View>
-
               {medicamentosSeleccionados.length === 0 ? (
                 <View style={styles.emptyMedList}>
                   <Package color="#D1D5DB" size={48} />
@@ -684,9 +632,9 @@ export default function EntregasScreen({ user }) {
                     <View style={styles.selectedMedInfo}>
                       <Text style={styles.selectedMedName}>{med.nombre}</Text>
                       <Text style={styles.selectedMedPresentation}>{med.presentacion}</Text>
-                      {med.ubicacion ? (
+                      {med.ubicacion && (
                         <Text style={styles.selectedMedUbicacion}>📍 {med.ubicacion}</Text>
-                      ) : null}
+                      )}
                     </View>
                     <Text style={styles.selectedMedCantidad}>x{med.cantidad}</Text>
                     <TouchableOpacity onPress={() => eliminarMedicamento(med.id)}>
@@ -695,14 +643,12 @@ export default function EntregasScreen({ user }) {
                   </View>
                 ))
               )}
-
-              {medicamentosSeleccionados.length > 0 ? (
+              {medicamentosSeleccionados.length > 0 && (
                 <View style={styles.totalContainer}>
                   <Text style={styles.totalLabel}>Total unidades:</Text>
                   <Text style={styles.totalValue}>{totalUnidades} uds</Text>
                 </View>
-              ) : null}
-
+              )}
               <TouchableOpacity
                 style={[
                   styles.procesarButton,
@@ -726,7 +672,6 @@ export default function EntregasScreen({ user }) {
         </View>
       </Modal>
 
-      {/* Modal de selección múltiple de medicamentos */}
       <Modal visible={showSelectMedModal} animationType="slide" transparent={false}>
         <View style={styles.fullModalContainer}>
           <View style={styles.fullModalHeader}>
@@ -741,7 +686,6 @@ export default function EntregasScreen({ user }) {
               <XCircle size={28} color="white" />
             </TouchableOpacity>
           </View>
-
           <View style={styles.searchInputContainerFull}>
             <Search size={20} color="#9CA3AF" />
             <TextInput
@@ -752,7 +696,6 @@ export default function EntregasScreen({ user }) {
               onChangeText={buscarMedicamentos}
             />
           </View>
-
           <FlatList
             data={medicamentosFiltrados.length > 0 ? medicamentosFiltrados : medicamentos}
             keyExtractor={(item) => item.id}
@@ -773,7 +716,6 @@ export default function EntregasScreen({ user }) {
                     </Text>
                   )}
                 </View>
-
                 <View style={styles.seleccionCantidadContainer}>
                   <TextInput
                     style={styles.cantidadInputSeleccion}
@@ -803,7 +745,6 @@ export default function EntregasScreen({ user }) {
               </View>
             }
           />
-
           {seleccionTemporalMed.length > 0 && (
             <View style={styles.seleccionPreviewContainer}>
               <Text style={styles.seleccionPreviewTitle}>Seleccionados:</Text>

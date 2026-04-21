@@ -1,5 +1,4 @@
-import { db } from '../../firebaseConfig';
-import { doc, getDoc } from 'firebase/firestore';
+import { pb } from '../services/PocketBaseConfig';
 
 // Normalizar texto para búsqueda case-insensitive
 const normalizeText = (text) => {

@@ -1,6 +1,5 @@
 // src/screens/HomeScreen.js
-import React, { useState, useEffect, useCallback } from 'react';
-import { sendLocalNotification, scheduleDailyNotification } from '../services/NotificationService';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,25 +12,11 @@ import {
 } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { db } from '../../firebaseConfig';
-import {
-  collection,
-  onSnapshot,
-  query,
-  orderBy,
-  where,
-  doc,
-  deleteDoc,
-  limit,
-  startAfter,
-  getDocs,
-} from 'firebase/firestore';
 import {
   Package,
   AlertCircle,
   ChevronDown,
   ChevronUp,
-  Trash,
   Activity,
   Key,
   FileText,
@@ -39,165 +24,101 @@ import {
   MinusCircle,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
-import { isAdmin } from '../services/AuthService';
+import { pb } from '../services/PocketBaseConfig';
 
 export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogout }) {
   const [medicamentos, setMedicamentos] = useState([]);
+  const [pedidosPendientes, setPedidosPendientes] = useState([]);
+  const [entregasAbiertas, setEntregasAbiertas] = useState([]);
   const [showPorVencer, setShowPorVencer] = useState(false);
   const [showVencidos, setShowVencidos] = useState(false);
   const [showInactivos, setShowInactivos] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  // Estados para paginación de inactivos
-  const [inactivosVisibles, setInactivosVisibles] = useState([]);
-  const [ultimoDocInactivos, setUltimoDocInactivos] = useState(null);
-  const [cargandoInactivos, setCargandoInactivos] = useState(false);
-  const [hayMasInactivos, setHayMasInactivos] = useState(true);
-  const [generatingPDF, setGeneratingPDF] = useState(false);
-  const userIsAdmin = isAdmin(user);
   const [showPedidosPendientes, setShowPedidosPendientes] = useState(false);
   const [showEntregasAbiertas, setShowEntregasAbiertas] = useState(false);
-  const [pedidosPendientes, setPedidosPendientes] = useState([]);
-  const [entregasAbiertas, setEntregasAbiertas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [generatingPDF, setGeneratingPDF] = useState(false);
 
-  // Cargar medicinos activos (sin paginación, son pocos)
-  useEffect(() => {
-    const q = query(collection(db, 'medicamentos'), orderBy('fechaRegistro', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = [];
-      snapshot.forEach((d) => docs.push({ id: d.id, ...d.data() }));
-      setMedicamentos(docs);
+  // Refs para evitar cargas duplicadas y manejar suscripciones
+  const isLoadingRef = useRef(false);
+  const subscriptionsRef = useRef([]);
+
+  // ── Función de carga principal ──
+  const loadData = useCallback(async (isRefresh = false) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+
+    try {
+      const [medicamentosResult, pedidosResult, entregasResult] = await Promise.all([
+        pb
+          .collection('medicamentos')
+          .getList(1, 1000, { sort: '-fechaRegistro', requestKey: null }),
+        pb
+          .collection('pedidos')
+          .getList(1, 100, { filter: 'atendido = false', sort: '-fechaPedido', requestKey: null }),
+        pb.collection('entregas').getList(1, 100, {
+          filter: 'estado = "abierta"',
+          sort: '-fechaCreacion',
+          requestKey: null,
+        }),
+      ]);
+
+      setMedicamentos(medicamentosResult.items);
+      setPedidosPendientes(pedidosResult.items);
+      setEntregasAbiertas(entregasResult.items);
+    } catch (error) {
+      if (!error.isAbort) {
+        console.error('Error cargando datos:', error);
+        Alert.alert('Error', 'No se pudieron cargar los datos');
+      }
+    } finally {
+      isLoadingRef.current = false;
       setLoading(false);
       setRefreshing(false);
-    });
-    return () => unsubscribe();
+    }
   }, []);
 
-  // Cargar inactivos con paginación cuando se abre la sección
-  useEffect(() => {
-    if (showInactivos) {
-      cargarInactivos(true);
-    }
-  }, [showInactivos]);
+  // ── Realtime subscriptions ──
+  const setupRealtimeSubscriptions = useCallback(() => {
+    // Limpiar suscripciones anteriores
+    subscriptionsRef.current.forEach((unsub) => unsub?.());
+    subscriptionsRef.current = [];
 
-  // Al iniciar, verificar medicamentos por vencer
-  useEffect(() => {
-    verificarVencimientos();
-  }, [medicamentos]);
-
-  // Cargar datos de pedidos pendientes y entregas abiertas en tiempo real
-  useEffect(() => {
-    console.log('🟢 Suscribiendo a cambios en pedidos pendientes...');
-    const qPedidos = query(collection(db, 'pedidos'), where('atendido', '==', false));
-    const unsubscribePedidos = onSnapshot(qPedidos, (snapshot) => {
-      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      console.log('📦 Pedidos pendientes actualizados:', docs.length);
-      setPedidosPendientes(docs);
+    // Suscribirse a cambios en medicamentos
+    const medicamentosUnsub = pb.collection('medicamentos').subscribe('*', (e) => {
+      console.log('🔄 Cambio en medicamentos (Home):', e.action);
+      loadData();
     });
 
-    console.log('🟢 Suscribiendo a cambios en entregas abiertas...');
-    const qEntregas = query(
-      collection(db, 'entregas'),
-      where('estado', '==', 'abierta'),
-      where('pedidoId', '==', null)
-    );
-    const unsubscribeEntregas = onSnapshot(qEntregas, (snapshot) => {
-      const docs = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      console.log('📦 Entregas abiertas actualizadas:', docs.length);
-      setEntregasAbiertas(docs);
+    // Suscribirse a cambios en pedidos
+    const pedidosUnsub = pb.collection('pedidos').subscribe('*', (e) => {
+      console.log('🔄 Cambio en pedidos (Home):', e.action);
+      loadData();
     });
+
+    // Suscribirse a cambios en entregas
+    const entregasUnsub = pb.collection('entregas').subscribe('*', (e) => {
+      console.log('🔄 Cambio en entregas (Home):', e.action);
+      loadData();
+    });
+
+    subscriptionsRef.current = [medicamentosUnsub, pedidosUnsub, entregasUnsub];
+  }, [loadData]);
+
+  // Cargar datos iniciales y setup realtime
+  useEffect(() => {
+    loadData();
+    setupRealtimeSubscriptions();
 
     return () => {
-      unsubscribePedidos();
-      unsubscribeEntregas();
+      subscriptionsRef.current.forEach((unsub) => unsub?.());
     };
-  }, []);
+  }, [loadData, setupRealtimeSubscriptions]);
 
-  // Funciones PDF
-  const handlePDFPedidosPendientes = () => {
-    generatePDFForPedidos(
-      pedidosPendientes,
-      'LISTADO DE PEDIDOS PENDIENTES',
-      'Total de pedidos pendientes'
-    );
-  };
-
-  const handlePDFEntregasAbiertas = () => {
-    generatePDFForEntregas(
-      entregasAbiertas,
-      'LISTADO DE ENTREGAS ABIERTAS',
-      'Total de entregas abiertas'
-    );
-  };
-
-  const verificarVencimientos = () => {
-    const hoy = new Date();
-    const en30Dias = new Date();
-    en30Dias.setDate(hoy.getDate() + 30);
-
-    const porVencer = medicamentos.filter((m) => {
-      const vence = new Date(m.vencimiento);
-      return vence <= en30Dias && vence >= hoy && m.activo !== false;
-    });
-
-    if (porVencer.length > 0) {
-      sendLocalNotification(
-        '⚠️ Medicamentos por vencer',
-        `${porVencer.length} medicamento(s) vencen en los próximos 30 días`
-      );
-    }
-  };
-
-  const cargarInactivos = async (reset = false) => {
-    if (cargandoInactivos) return;
-    if (!reset && !hayMasInactivos) return;
-
-    setCargandoInactivos(true);
-    try {
-      let q;
-      if (reset) {
-        q = query(
-          collection(db, 'medicamentos'),
-          where('activo', '==', false),
-          orderBy('fechaBaja', 'desc'), // ← Esto requiere índice
-          limit(50)
-        );
-      } else {
-        q = query(
-          collection(db, 'medicamentos'),
-          where('activo', '==', false),
-          orderBy('fechaBaja', 'desc'),
-          startAfter(ultimoDocInactivos),
-          limit(50)
-        );
-      }
-
-      const snapshot = await getDocs(q);
-      const nuevosInactivos = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-
-      if (reset) {
-        setInactivosVisibles(nuevosInactivos);
-      } else {
-        setInactivosVisibles((prev) => [...prev, ...nuevosInactivos]);
-      }
-
-      setUltimoDocInactivos(snapshot.docs[snapshot.docs.length - 1]);
-      setHayMasInactivos(snapshot.docs.length === 50);
-    } catch (error) {
-      console.error('Error cargando inactivos:', error);
-    } finally {
-      setCargandoInactivos(false);
-    }
-  };
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    // Recargar inactivos si están abiertos
-    if (showInactivos) {
-      cargarInactivos(true);
-    }
-  };
+  const onRefresh = useCallback(() => loadData(true), [loadData]);
 
   const handleUserPress = () => {
     Alert.alert('Cerrar Sesión', `¿Deseas cerrar la sesión de ${user?.nombre || 'usuario'}?`, [
@@ -206,23 +127,23 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
     ]);
   };
 
-  const handleDeleteMed = (medId, medName) => {
+  const handleDeleteMed = async (medId, medName) => {
     Alert.alert(
       'Eliminar Permanentemente',
-      `¿Estás SEGURO de eliminar permanentemente ${medName}?\n\nEsta acción NO se puede deshacer y afectará el historial de pedidos y entregas.`,
+      `¿Estás SEGURO de eliminar permanentemente ${medName}?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Eliminar',
+          style: 'destructive',
           onPress: async () => {
             try {
-              await deleteDoc(doc(db, 'medicamentos', medId));
+              await pb.collection('medicamentos').delete(medId);
               Alert.alert('Éxito', 'Medicamento eliminado permanentemente');
             } catch (error) {
               Alert.alert('Error', 'No se pudo eliminar');
             }
           },
-          style: 'destructive',
         },
       ]
     );
@@ -280,51 +201,24 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       `;
       });
 
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="utf-8">
-            <title>${title}</title>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body { font-family: 'Helvetica', 'Arial', sans-serif; padding: 20px; background-color: white; }
-              .header { text-align: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #7C3AED; }
-              .title { font-size: 20px; font-weight: bold; color: #1F2937; margin-bottom: 5px; }
-              .subtitle { font-size: 12px; color: #6B7280; }
-              .stats { margin-bottom: 15px; padding: 10px; background-color: #F3F4F6; border-radius: 8px; text-align: center; }
-              .stats-text { font-size: 12px; color: #374151; }
-              table { width: 100%; border-collapse: collapse; font-size: 11px; }
-              th { background-color: #7C3AED; color: white; padding: 10px; text-align: left; font-weight: bold; }
-              td { padding: 8px; border-bottom: 1px solid #E5E7EB; }
-              .footer { margin-top: 20px; padding-top: 10px; text-align: center; font-size: 10px; color: #9CA3AF; border-top: 1px solid #E5E7EB; }
-              @media print {
-                body { padding: 10px; }
-                th { background-color: #7C3AED; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="header">
-              <div class="title">${title}</div>
-              <div class="subtitle">Generado: ${today}</div>
-            </div>
-            <div class="stats">
-              <div class="stats-text">${subtitle}: ${medicamentosList.length}</div>
-            </div>
-            <table>
-              <thead>
-                <tr><th>#</th><th>Nombre</th><th>Presentación</th><th>Categoría</th><th>Stock</th><th>Vencimiento</th><th>Ubicación</th><th>Estado</th></tr>
-              </thead>
-              <tbody>${tableRows}</tbody>
-            </table>
-            <div class="footer">
-              <div>Farmacia Iglesia - Sistema de Gestión de Inventario</div>
-              <div>Reporte generado automáticamente</div>
-            </div>
-          </body>
-        </html>
-      `;
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+        <style>
+          *{margin:0;padding:0;box-sizing:border-box}
+          body{font-family:'Helvetica','Arial',sans-serif;padding:20px;background:white}
+          .header{text-align:center;margin-bottom:20px;padding-bottom:15px;border-bottom:2px solid #7C3AED}
+          .title{font-size:20px;font-weight:bold;color:#1F2937;margin-bottom:5px}
+          .subtitle{font-size:12px;color:#6B7280}
+          .stats{margin-bottom:15px;padding:10px;background:#F3F4F6;border-radius:8px;text-align:center}
+          table{width:100%;border-collapse:collapse;font-size:11px}
+          th{background:#7C3AED;color:white;padding:10px;text-align:left;font-weight:bold}
+          .footer{margin-top:20px;padding-top:10px;text-align:center;font-size:10px;color:#9CA3AF;border-top:1px solid #E5E7EB}
+        </style></head><body>
+        <div class="header"><div class="title">${title}</div><div class="subtitle">Generado: ${today}</div></div>
+        <div class="stats"><div class="stats-text">${subtitle}: ${medicamentosList.length}</div></div>
+        <table><thead><tr><th>#</th><th>Nombre</th><th>Presentación</th><th>Categoría</th><th>Stock</th><th>Vencimiento</th><th>Ubicación</th><th>Estado</th></tr></thead>
+        <tbody>${tableRows}</tbody></table>
+        <div class="footer"><div>FarmaRincón - Sistema de Gestión de Inventario</div></div>
+        </body></html>`;
 
       const { uri } = await Print.printToFileAsync({ html });
       if (await Sharing.isAvailableAsync()) {
@@ -332,8 +226,6 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           mimeType: 'application/pdf',
           dialogTitle: 'Compartir reporte',
         });
-      } else {
-        Alert.alert('Error', 'No es posible compartir archivos en este dispositivo');
       }
     } catch (error) {
       console.error('Error generando PDF:', error);
@@ -343,7 +235,48 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
     }
   };
 
-  // Funciones para cada tipo de PDF
+  const generatePDFForPedidos = async (pedidosList, title, subtitle) => {
+    if (pedidosList.length === 0) return;
+    setGeneratingPDF(true);
+    try {
+      const today = new Date().toLocaleDateString('es-ES');
+      let tableRows = '';
+      pedidosList.forEach((pedido, index) => {
+        tableRows += `<tr><td>${index + 1}</td><td>${escapeHtml(pedido.nombreSolicitante || '')}</td><td>${pedido.medicamentosSolicitados?.length || 0}</td><td>${new Date(pedido.fechaPedido).toLocaleDateString()}</td></tr>`;
+      });
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+        <style>body{font-family:Arial;padding:20px}th{background:#7C3AED;color:white}</style></head>
+        <body><h2>${title}</h2><p>${subtitle}: ${pedidosList.length}</p>
+        <table border="1"><tr><th>#</th><th>Solicitante</th><th>Medicamentos</th><th>Fecha</th></tr>
+        ${tableRows}</table></body></html>`;
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf' });
+    } finally {
+      setGeneratingPDF(false);
+    }
+  };
+
+  const generatePDFForEntregas = async (entregasList, title, subtitle) => {
+    if (entregasList.length === 0) return;
+    setGeneratingPDF(true);
+    try {
+      const today = new Date().toLocaleDateString('es-ES');
+      let tableRows = '';
+      entregasList.forEach((entrega, index) => {
+        tableRows += `<tr><td>${index + 1}</td><td>${escapeHtml(entrega.destino || '')}</td><td>${entrega.items?.length || 0}</td><td>${new Date(entrega.fechaCreacion).toLocaleDateString()}</td></tr>`;
+      });
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+        <style>body{font-family:Arial;padding:20px}th{background:#EA580C;color:white}</style></head>
+        <body><h2>${title}</h2><p>${subtitle}: ${entregasList.length}</p>
+        <table border="1"><tr><th>#</th><th>Destino</th><th>Items</th><th>Fecha</th></tr>
+        ${tableRows}</table></body></html>`;
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf' });
+    } finally {
+      setGeneratingPDF(false);
+    }
+  };
+
   const handlePDFActivos = () => {
     const activos = medicamentos.filter((m) => m.activo !== false);
     generatePDFForMedicamentos(
@@ -398,6 +331,22 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
     );
   };
 
+  const handlePDFPedidosPendientes = () => {
+    generatePDFForPedidos(
+      pedidosPendientes,
+      'LISTADO DE PEDIDOS PENDIENTES',
+      'Total de pedidos pendientes'
+    );
+  };
+
+  const handlePDFEntregasAbiertas = () => {
+    generatePDFForEntregas(
+      entregasAbiertas,
+      'LISTADO DE ENTREGAS ABIERTAS',
+      'Total de entregas abiertas'
+    );
+  };
+
   const medicamentosActivos = medicamentos.filter((m) => m.activo !== false);
   const medicamentosInactivos = medicamentos.filter((m) => m.activo === false);
   const medicamentosVencidos = medicamentosActivos.filter(
@@ -425,148 +374,53 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       style={styles.container}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
-      {/* Header con usuario dentro */}
       <View style={styles.header}>
         <View style={styles.headerRow}>
           <Package color="#7C3AED" size={32} />
-          <Text style={styles.headerTitle}>Farmacia Iglesia</Text>
+          <Text style={styles.headerTitle}>FarmaRincón</Text>
           <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>
             <Key color="white" size={20} />
           </TouchableOpacity>
         </View>
-        {/* Usuario dentro del header */}
         <TouchableOpacity style={styles.userBadge} onPress={handleUserPress}>
           <Text style={styles.userName}>👤 {user?.nombre}</Text>
-          <Text style={[styles.userType, userIsAdmin ? styles.adminType : styles.userTypeText]}>
-            {userIsAdmin ? '🔓 Admin' : '🔒 Usuario'}
+          <Text
+            style={[
+              styles.userType,
+              user?.tipo === 'admin' ? styles.adminType : styles.userTypeText,
+            ]}
+          >
+            {user?.tipo === 'admin' ? '🔓 Admin' : '🔒 Usuario'}
           </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Inactivos con paginación */}
-      {medicamentosInactivos.length > 0 && (
-        <View style={styles.inactivosCard}>
-          <TouchableOpacity
-            style={styles.inactivosHeader}
-            onPress={() => setShowInactivos(!showInactivos)}
-          >
-            <View style={styles.inactivosTitle}>
-              <AlertCircle color="#6B7280" size={20} />
-              <Text style={styles.inactivosTitleText}>
-                Medicamentos Inactivos ({medicamentosInactivos.length})
-              </Text>
-              <TouchableOpacity onPress={handlePDFInactivos} style={styles.inlinePdfButton}>
-                <FileText size={16} color="#7C3AED" />
-              </TouchableOpacity>
-            </View>
-            {showInactivos ? (
-              <ChevronUp color="#6B7280" size={20} />
-            ) : (
-              <ChevronDown color="#6B7280" size={20} />
-            )}
-          </TouchableOpacity>
+      <View style={styles.statsGrid}>
+        <TouchableOpacity style={styles.statCard} onPress={handlePDFActivos}>
+          <Text style={styles.statNumber}>{medicamentosActivos.length}</Text>
+          <Text style={styles.statLabel}>Activos</Text>
+          <FileText size={14} color="#7C3AED" style={styles.pdfIcon} />
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.statCard, styles.statVigente]} onPress={handlePDFVigentes}>
+          <Text style={styles.statNumber}>{medicamentosVigentes.length}</Text>
+          <Text style={styles.statLabel}>Vigentes</Text>
+          <FileText size={14} color="#10B981" style={styles.pdfIcon} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.statCard, styles.statPorVencer]}
+          onPress={handlePDFPorVencer}
+        >
+          <Text style={styles.statNumber}>{medicamentosPorVencer.length}</Text>
+          <Text style={styles.statLabel}>Por vencer</Text>
+          <FileText size={14} color="#EA580C" style={styles.pdfIcon} />
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.statCard, styles.statVencido]} onPress={handlePDFVencidos}>
+          <Text style={styles.statNumber}>{medicamentosVencidos.length}</Text>
+          <Text style={styles.statLabel}>Vencidos</Text>
+          <FileText size={14} color="#DC2626" style={styles.pdfIcon} />
+        </TouchableOpacity>
+      </View>
 
-          {showInactivos && (
-            <View style={styles.inactivosList}>
-              {inactivosVisibles.map((med) => (
-                <View key={med.id} style={styles.inactivoItem}>
-                  <View style={styles.inactivoInfo}>
-                    <Text style={styles.inactivoNombre}>{med.nombre}</Text>
-                    <Text style={styles.inactivoPresentacion}>{med.presentacion}</Text>
-                    <Text style={styles.inactivoFecha}>
-                      Dado de baja:{' '}
-                      {med.fechaBaja
-                        ? new Date(med.fechaBaja).toLocaleDateString()
-                        : 'Fecha desconocida'}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => handleDeleteMed(med.id, med.nombre)}
-                    style={styles.deleteInactivoButton}
-                  >
-                    <Trash color="#DC2626" size={18} />
-                  </TouchableOpacity>
-                </View>
-              ))}
-              {cargandoInactivos && (
-                <View style={styles.loadingMore}>
-                  <ActivityIndicator size="small" color="#7C3AED" />
-                  <Text style={styles.loadingMoreText}>Cargando más...</Text>
-                </View>
-              )}
-              {!cargandoInactivos && hayMasInactivos && (
-                <TouchableOpacity
-                  style={styles.loadMoreButton}
-                  onPress={() => cargarInactivos(false)}
-                >
-                  <Text style={styles.loadMoreText}>Cargar más</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* Por vencer */}
-      {medicamentosPorVencer.length > 0 && (
-        <View style={styles.section}>
-          <TouchableOpacity
-            style={styles.sectionHeader}
-            onPress={() => setShowPorVencer(!showPorVencer)}
-          >
-            <View style={styles.sectionTitle}>
-              <AlertCircle color="#EA580C" size={20} />
-              <Text style={[styles.sectionTitleText, { color: '#EA580C' }]}>
-                Por Vencer ({medicamentosPorVencer.length})
-              </Text>
-              <TouchableOpacity onPress={handlePDFPorVencer} style={styles.inlinePdfButton}>
-                <FileText size={16} color="#EA580C" />
-              </TouchableOpacity>
-            </View>
-            {showPorVencer ? (
-              <ChevronUp color="#EA580C" size={20} />
-            ) : (
-              <ChevronDown color="#EA580C" size={20} />
-            )}
-          </TouchableOpacity>
-
-          {showPorVencer &&
-            medicamentosPorVencer.map((med) => (
-              <MedicamentoCard key={med.id} med={med} status="porVencer" />
-            ))}
-        </View>
-      )}
-
-      {/* Vencidos */}
-      {medicamentosVencidos.length > 0 && (
-        <View style={styles.section}>
-          <TouchableOpacity
-            style={styles.sectionHeader}
-            onPress={() => setShowVencidos(!showVencidos)}
-          >
-            <View style={styles.sectionTitle}>
-              <AlertCircle color="#DC2626" size={20} />
-              <Text style={[styles.sectionTitleText, { color: '#DC2626' }]}>
-                Vencidos ({medicamentosVencidos.length})
-              </Text>
-              <TouchableOpacity onPress={handlePDFVencidos} style={styles.inlinePdfButton}>
-                <FileText size={16} color="#DC2626" />
-              </TouchableOpacity>
-            </View>
-            {showVencidos ? (
-              <ChevronUp color="#DC2626" size={20} />
-            ) : (
-              <ChevronDown color="#DC2626" size={20} />
-            )}
-          </TouchableOpacity>
-
-          {showVencidos &&
-            medicamentosVencidos.map((med) => (
-              <MedicamentoCard key={med.id} med={med} status="vencido" />
-            ))}
-        </View>
-      )}
-      {/* Pedidos Pendientes */}
       {pedidosPendientes.length > 0 && (
         <View style={styles.section}>
           <TouchableOpacity
@@ -596,7 +450,6 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
         </View>
       )}
 
-      {/* Entregas Abiertas */}
       {entregasAbiertas.length > 0 && (
         <View style={styles.section}>
           <TouchableOpacity
@@ -626,14 +479,61 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
         </View>
       )}
 
-      {medicamentosActivos.length === 0 && (
-        <View style={styles.emptyContainer}>
-          <Package color="#D1D5DB" size={64} />
-          <Text style={styles.emptyTitle}>No hay medicamentos activos</Text>
-          <Text style={styles.emptyText}>Agrega medicamentos desde la pestaña Registrar</Text>
+      {medicamentosPorVencer.length > 0 && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setShowPorVencer(!showPorVencer)}
+          >
+            <View style={styles.sectionTitle}>
+              <AlertCircle color="#EA580C" size={20} />
+              <Text style={[styles.sectionTitleText, { color: '#EA580C' }]}>
+                Por Vencer ({medicamentosPorVencer.length})
+              </Text>
+              <TouchableOpacity onPress={handlePDFPorVencer} style={styles.inlinePdfButton}>
+                <FileText size={16} color="#EA580C" />
+              </TouchableOpacity>
+            </View>
+            {showPorVencer ? (
+              <ChevronUp color="#EA580C" size={20} />
+            ) : (
+              <ChevronDown color="#EA580C" size={20} />
+            )}
+          </TouchableOpacity>
+          {showPorVencer &&
+            medicamentosPorVencer.map((med) => (
+              <MedicamentoCard key={med.id} med={med} status="porVencer" />
+            ))}
         </View>
       )}
-      <View style={{ height: 20 }} />
+
+      {medicamentosVencidos.length > 0 && (
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setShowVencidos(!showVencidos)}
+          >
+            <View style={styles.sectionTitle}>
+              <AlertCircle color="#DC2626" size={20} />
+              <Text style={[styles.sectionTitleText, { color: '#DC2626' }]}>
+                Vencidos ({medicamentosVencidos.length})
+              </Text>
+              <TouchableOpacity onPress={handlePDFVencidos} style={styles.inlinePdfButton}>
+                <FileText size={16} color="#DC2626" />
+              </TouchableOpacity>
+            </View>
+            {showVencidos ? (
+              <ChevronUp color="#DC2626" size={20} />
+            ) : (
+              <ChevronDown color="#DC2626" size={20} />
+            )}
+          </TouchableOpacity>
+          {showVencidos &&
+            medicamentosVencidos.map((med) => (
+              <MedicamentoCard key={med.id} med={med} status="vencido" />
+            ))}
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -706,64 +606,14 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
   },
   statVigente: { backgroundColor: '#DCFCE7' },
   statPorVencer: { backgroundColor: '#FFEDD5' },
   statVencido: { backgroundColor: '#FEE2E2' },
   statNumber: { fontSize: 28, fontWeight: 'bold', color: '#1F2937' },
-  statLabel: { fontSize: 12, color: '#6B7280', marginTop: 5, textAlign: 'center' },
+  statLabel: { fontSize: 12, color: '#6B7280', marginTop: 5 },
   pdfIcon: { marginTop: 4, opacity: 0.6 },
   inlinePdfButton: { marginLeft: 8, padding: 4 },
-  inactivosCard: {
-    backgroundColor: 'white',
-    margin: 12,
-    borderRadius: 12,
-    padding: 12,
-    elevation: 2,
-  },
-  inactivosHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 8,
-  },
-  inactivosTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  inactivosTitleText: { fontSize: 16, fontWeight: '600', color: '#6B7280', flex: 1 },
-  inactivosList: { marginTop: 10 },
-  inactivoItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  inactivoInfo: { flex: 1 },
-  inactivoNombre: { fontSize: 14, fontWeight: '600', color: '#1F2937' },
-  inactivoPresentacion: { fontSize: 12, color: '#6B7280', marginTop: 2 },
-  inactivoFecha: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
-  deleteInactivoButton: { padding: 8 },
-  loadingMore: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 16,
-    gap: 8,
-  },
-  loadingMoreText: { fontSize: 12, color: '#6B7280' },
-  loadMoreButton: {
-    backgroundColor: '#F3F4F6',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  loadMoreText: { color: '#7C3AED', fontWeight: '600' },
   section: { backgroundColor: 'white', margin: 12, borderRadius: 12, padding: 12, elevation: 2 },
   sectionHeader: {
     flexDirection: 'row',
@@ -779,9 +629,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginVertical: 5,
     borderLeftWidth: 4,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     elevation: 1,
   },
   medInfo: { flex: 1 },
@@ -791,48 +638,24 @@ const styles = StyleSheet.create({
   medFooter: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
   medQuantity: { fontSize: 14, fontWeight: '600', color: '#1F2937' },
   medExpiry: { fontSize: 12 },
-  emptyContainer: { alignItems: 'center', justifyContent: 'center', padding: 40, marginTop: 20 },
-  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
-  emptyText: { fontSize: 14, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
-  // Estilos para Pedidos Pendientes (compacto)
   pedidoCardCompacto: {
     backgroundColor: '#F9FAFB',
     borderRadius: 10,
     padding: 12,
     marginBottom: 8,
-    marginHorizontal: 4,
     borderLeftWidth: 3,
     borderLeftColor: '#7C3AED',
   },
-  pedidoNombreCompacto: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2937',
-  },
-  pedidoInfoCompacto: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 4,
-  },
-
-  // Estilos para Entregas Abiertas (compacto)
+  pedidoNombreCompacto: { fontSize: 14, fontWeight: '600', color: '#1F2937' },
+  pedidoInfoCompacto: { fontSize: 12, color: '#6B7280', marginTop: 4 },
   entregaCardCompacto: {
     backgroundColor: '#F9FAFB',
     borderRadius: 10,
     padding: 12,
     marginBottom: 8,
-    marginHorizontal: 4,
     borderLeftWidth: 3,
     borderLeftColor: '#EA580C',
   },
-  entregaDestinoCompacto: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2937',
-  },
-  entregaInfoCompacto: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 4,
-  },
+  entregaDestinoCompacto: { fontSize: 14, fontWeight: '600', color: '#1F2937' },
+  entregaInfoCompacto: { fontSize: 12, color: '#6B7280', marginTop: 4 },
 });

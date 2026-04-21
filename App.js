@@ -1,15 +1,24 @@
-// App.js - Versión corregida para PocketBase con tabla "usuarios"
+import EventSource from 'react-native-sse';
 
+global.EventSource = EventSource;
+// App.js
 import React, { useState, useEffect } from 'react';
 import { LogBox, View, ActivityIndicator, Platform, Dimensions, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Home, Package, PlusCircle, History, ClipboardList, MinusCircle } from 'lucide-react-native';
+import {
+  Home,
+  Package,
+  PlusCircle,
+  History,
+  ClipboardList,
+  MinusCircle,
+} from 'lucide-react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// 👇 Importar PocketBase
+// Importar PocketBase
 import { pb } from './src/services/PocketBaseConfig';
 
 // Importar screens
@@ -22,9 +31,7 @@ import EntregasScreen from './src/screens/EntregasScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
 import LoginModal from './src/components/LoginModal';
 
-LogBox.ignoreLogs([
-  'Setting a timer for a long period of time',
-]);
+LogBox.ignoreLogs(['Setting a timer for a long period of time']);
 
 const Tab = createBottomTabNavigator();
 
@@ -36,15 +43,20 @@ export default function App() {
   const [geminiApiKey, setGeminiApiKey] = useState('');
   const [bottomInset, setBottomInset] = useState(20);
 
+  // Cargar usuario guardado al iniciar
   useEffect(() => {
-    checkApiKey();
+    const initializeApp = async () => {
+      await checkApiKey();
+      await loadStoredUser();
+      setIsLoading(false);
+    };
+    initializeApp();
 
     if (Platform.OS === 'android') {
       setTimeout(() => {
         const { height: screenHeight } = Dimensions.get('window');
         const { height: screenHeightFull } = Dimensions.get('screen');
         const navigationBarHeight = screenHeightFull - screenHeight;
-
         if (navigationBarHeight > 0) {
           setBottomInset(navigationBarHeight + 10);
         } else {
@@ -64,64 +76,72 @@ export default function App() {
       }
     } catch (error) {
       console.error('Error checking API key:', error);
-    } finally {
-      setIsLoading(false);
     }
   };
 
-  // 👇 Login usando tabla "usuarios" (solo nombre, sin email/contraseña)
+  // App.js - loadStoredUser actualizado
+  const loadStoredUser = async () => {
+    try {
+      // Cargar autenticación guardada de PocketBase
+      const stored = await AsyncStorage.getItem('pb_auth');
+      if (stored) {
+        const { token, model } = JSON.parse(stored);
+        if (token && model) {
+          pb.authStore.save(token, model);
+          setUser(model);
+          setIsLoggedIn(true);
+          console.log('✅ Sesión restaurada:', model.nombre);
+          return;
+        }
+      }
+
+      // No hay sesión guardada
+      setIsLoggedIn(false);
+    } catch (error) {
+      console.error('Error loading stored user:', error);
+      setIsLoggedIn(false);
+    }
+  };
+
+  // App.js - handleLogin simplificado (sin autenticación compleja)
   const handleLogin = async (username) => {
     try {
-      // Buscar usuario por nombre en la colección "usuarios"
       const result = await pb.collection('usuarios').getList(1, 1, {
-        filter: `nombre = "${username}"`
+        filter: `nombre = "${username}"`,
       });
-      
+
       if (result.items.length === 0) {
         Alert.alert('Error', 'Usuario no encontrado');
         return;
       }
-      
+
       const userData = result.items[0];
       setUser(userData);
       setIsLoggedIn(true);
-      
-      // Guardar sesión en AsyncStorage (opcional, para persistencia)
       await AsyncStorage.setItem('currentUser', JSON.stringify(userData));
-      
     } catch (error) {
-      console.error('Error de login:', error);
+      console.error('❌ Error de login:', error);
       Alert.alert('Error', 'No se pudo conectar con el servidor');
     }
   };
 
-  // 👇 Logout
   const handleLogout = async () => {
+    pb.authStore.clear();
+    await AsyncStorage.removeItem('pb_auth');
     setUser(null);
     setIsLoggedIn(false);
-    await AsyncStorage.removeItem('currentUser');
   };
-
-  // 👇 Verificar si hay sesión guardada al iniciar
-  useEffect(() => {
-    const loadStoredUser = async () => {
-      try {
-        const storedUser = await AsyncStorage.getItem('currentUser');
-        if (storedUser) {
-          const userData = JSON.parse(storedUser);
-          setUser(userData);
-          setIsLoggedIn(true);
-        }
-      } catch (error) {
-        console.error('Error loading stored user:', error);
-      }
-    };
-    loadStoredUser();
-  }, []);
 
   if (isLoading) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' }}>
+      <View
+        style={{
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#F3F4F6',
+        }}
+      >
         <ActivityIndicator size="large" color="#7C3AED" />
       </View>
     );

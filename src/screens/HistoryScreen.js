@@ -1,5 +1,5 @@
 // src/screens/HistoryScreen.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,8 +12,6 @@ import {
   TextInput,
   Platform,
 } from 'react-native';
-import { db } from '../../firebaseConfig';
-import { collection, query, orderBy, getDocs } from 'firebase/firestore';
 import {
   History,
   Package,
@@ -31,8 +29,8 @@ import {
 } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
+import { pb } from '../services/PocketBaseConfig';
 
-// Función para normalizar texto
 const normalizeText = (text) => {
   if (!text) return '';
   return text
@@ -42,7 +40,6 @@ const normalizeText = (text) => {
     .replace(/[\u0300-\u036f]/g, '');
 };
 
-// Función para formatear fecha para mostrar
 const formatDisplayDate = (dateString) => {
   if (!dateString) return '';
   const [year, month, day] = dateString.split('-');
@@ -57,7 +54,6 @@ export default function HistoryScreen() {
   const [expandedIds, setExpandedIds] = useState([]);
   const [filter, setFilter] = useState('todas');
 
-  // Estado de filtros
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [filters, setFilters] = useState({
     destino: '',
@@ -74,38 +70,74 @@ export default function HistoryScreen() {
   const [showDatePicker, setShowDatePicker] = useState(null);
   const [activeFiltersCount, setActiveFiltersCount] = useState(0);
 
-  useEffect(() => {
-    const cargarDatos = async () => {
-      try {
-        const [entregasSnap, pedidosSnap] = await Promise.all([
-          getDocs(query(collection(db, 'entregas'), orderBy('fechaCreacion', 'desc'))),
-          getDocs(query(collection(db, 'pedidos'), orderBy('fechaPedido', 'desc'))),
-        ]);
+  // Refs para evitar cargas duplicadas y manejar suscripciones
+  const isLoadingRef = useRef(false);
+  const subscriptionsRef = useRef([]);
 
-        const entregasData = entregasSnap.docs.map((doc) => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            ...data,
-            items: data.items || [],
-            totalUnidades: (data.items || []).reduce((sum, item) => sum + (item.cantidad || 1), 0),
-          };
-        });
+  // ── Función de carga principal ──
+  const loadData = useCallback(async (isRefresh = false) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
 
-        setEntregas(entregasData);
-        setPedidos(pedidosSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-        setLoading(false);
-      } catch (error) {
-        console.error('Error:', error);
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+
+    try {
+      const [entregasResult, pedidosResult] = await Promise.all([
+        pb.collection('entregas').getList(1, 200, { sort: '-fechaCreacion', requestKey: null }),
+        pb.collection('pedidos').getList(1, 200, { sort: '-fechaPedido', requestKey: null }),
+      ]);
+
+      const entregasWithTotal = entregasResult.items.map((item) => ({
+        ...item,
+        totalUnidades: (item.items || []).reduce((sum, i) => sum + (i.cantidad || 1), 0),
+      }));
+
+      setEntregas(entregasWithTotal);
+      setPedidos(pedidosResult.items);
+    } catch (error) {
+      if (!error.isAbort) {
+        console.error('Error cargando datos:', error);
       }
-    };
-
-    cargarDatos();
+    } finally {
+      isLoadingRef.current = false;
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-  };
+  // ── Realtime subscriptions ──
+  const setupRealtimeSubscriptions = useCallback(() => {
+    // Limpiar suscripciones anteriores
+    subscriptionsRef.current.forEach((unsub) => unsub?.());
+    subscriptionsRef.current = [];
+
+    // Suscribirse a cambios en entregas
+    const entregasUnsub = pb.collection('entregas').subscribe('*', (e) => {
+      console.log('🔄 Cambio en entregas (History):', e.action, e.record?.id);
+      loadData();
+    });
+
+    // Suscribirse a cambios en pedidos
+    const pedidosUnsub = pb.collection('pedidos').subscribe('*', (e) => {
+      console.log('🔄 Cambio en pedidos (History):', e.action);
+      loadData();
+    });
+
+    subscriptionsRef.current = [entregasUnsub, pedidosUnsub];
+  }, [loadData]);
+
+  // Cargar datos iniciales y setup realtime
+  useEffect(() => {
+    loadData();
+    setupRealtimeSubscriptions();
+
+    return () => {
+      subscriptionsRef.current.forEach((unsub) => unsub?.());
+    };
+  }, [loadData, setupRealtimeSubscriptions]);
+
+  const onRefresh = useCallback(() => loadData(true), [loadData]);
 
   const formatDate = (dateString) => {
     if (!dateString) return 'Fecha desconocida';
@@ -119,55 +151,32 @@ export default function HistoryScreen() {
     });
   };
 
-  const getPedidoInfo = (pedidoId) => {
-    return pedidos.find((p) => p.id === pedidoId);
-  };
+  const getPedidoInfo = (pedidoId) => pedidos.find((p) => p.id === pedidoId);
 
   const getFilteredEntregas = () => {
     let filtered = [...entregas];
-
-    // Filtro por tipo (vinculadas/huérfanas)
-    if (filter === 'vinculadas') {
-      filtered = filtered.filter((e) => e.pedidoId);
-    } else if (filter === 'huerfanas') {
-      filtered = filtered.filter((e) => !e.pedidoId);
-    }
-
-    // Filtro por destino
+    if (filter === 'vinculadas') filtered = filtered.filter((e) => e.pedidoId);
+    else if (filter === 'huerfanas') filtered = filtered.filter((e) => !e.pedidoId);
     if (filters.destino.trim()) {
       const searchNorm = normalizeText(filters.destino);
-      filtered = filtered.filter((entrega) => {
-        return normalizeText(entrega.destino || '').includes(searchNorm);
-      });
+      filtered = filtered.filter((e) => normalizeText(e.destino || '').includes(searchNorm));
     }
-
-    // Filtro por medicamento (buscar en items)
     if (filters.medicamento.trim()) {
       const searchNorm = normalizeText(filters.medicamento);
-      filtered = filtered.filter((entrega) => {
-        return entrega.items?.some((item) => normalizeText(item.nombre).includes(searchNorm));
-      });
+      filtered = filtered.filter((e) =>
+        e.items?.some((item) => normalizeText(item.nombre).includes(searchNorm))
+      );
     }
-
-    // Filtro por fecha
     if (filters.fechaDesde) {
       const desde = new Date(filters.fechaDesde);
       desde.setHours(0, 0, 0, 0);
-      filtered = filtered.filter((entrega) => {
-        const fechaEntrega = new Date(entrega.fechaCreacion);
-        return fechaEntrega >= desde;
-      });
+      filtered = filtered.filter((e) => new Date(e.fechaCreacion) >= desde);
     }
-
     if (filters.fechaHasta) {
       const hasta = new Date(filters.fechaHasta);
       hasta.setHours(23, 59, 59, 999);
-      filtered = filtered.filter((entrega) => {
-        const fechaEntrega = new Date(entrega.fechaCreacion);
-        return fechaEntrega <= hasta;
-      });
+      filtered = filtered.filter((e) => new Date(e.fechaCreacion) <= hasta);
     }
-
     return filtered;
   };
 
@@ -192,12 +201,7 @@ export default function HistoryScreen() {
   };
 
   const clearFilters = () => {
-    const emptyFilters = {
-      destino: '',
-      medicamento: '',
-      fechaDesde: '',
-      fechaHasta: '',
-    };
+    const emptyFilters = { destino: '', medicamento: '', fechaDesde: '', fechaHasta: '' };
     setFilters(emptyFilters);
     setTempFilters(emptyFilters);
     updateActiveFiltersCount(emptyFilters);
@@ -211,21 +215,15 @@ export default function HistoryScreen() {
       const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
       const day = String(selectedDate.getDate()).padStart(2, '0');
       const dateStr = `${year}-${month}-${day}`;
-
-      if (field === 'desde') {
-        setTempFilters((prev) => ({ ...prev, fechaDesde: dateStr }));
-      } else if (field === 'hasta') {
-        setTempFilters((prev) => ({ ...prev, fechaHasta: dateStr }));
-      }
+      if (field === 'desde') setTempFilters((prev) => ({ ...prev, fechaDesde: dateStr }));
+      else if (field === 'hasta') setTempFilters((prev) => ({ ...prev, fechaHasta: dateStr }));
     }
   };
 
   const toggleExpand = (id) => {
-    if (expandedIds.includes(id)) {
-      setExpandedIds(expandedIds.filter((item) => item !== id));
-    } else {
-      setExpandedIds([...expandedIds, id]);
-    }
+    setExpandedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
   };
 
   const filteredEntregas = getFilteredEntregas();
@@ -260,7 +258,6 @@ export default function HistoryScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Filtros rápidos (tipo) */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
         <TouchableOpacity
           style={[styles.filterChip, filter === 'todas' && styles.filterChipActive]}
@@ -270,7 +267,6 @@ export default function HistoryScreen() {
             Todas ({totalEntregas})
           </Text>
         </TouchableOpacity>
-
         <TouchableOpacity
           style={[styles.filterChip, filter === 'vinculadas' && styles.filterChipActive]}
           onPress={() => setFilter('vinculadas')}
@@ -281,7 +277,6 @@ export default function HistoryScreen() {
             Vinculadas ({vinculadasCount})
           </Text>
         </TouchableOpacity>
-
         <TouchableOpacity
           style={[styles.filterChip, filter === 'huerfanas' && styles.filterChipActive]}
           onPress={() => setFilter('huerfanas')}
@@ -294,7 +289,6 @@ export default function HistoryScreen() {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Estadísticas con filtros activos */}
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
           <Text style={styles.statNumber}>{filteredEntregas.length}</Text>
@@ -334,7 +328,6 @@ export default function HistoryScreen() {
           const isExpanded = expandedIds.includes(entrega.id);
           const pedidoInfo = entrega.pedidoId ? getPedidoInfo(entrega.pedidoId) : null;
           const isVinculada = !!entrega.pedidoId;
-
           return (
             <View key={entrega.id} style={styles.card}>
               <TouchableOpacity style={styles.cardHeader} onPress={() => toggleExpand(entrega.id)}>
@@ -360,30 +353,22 @@ export default function HistoryScreen() {
                   )}
                 </View>
               </TouchableOpacity>
-
               <View style={styles.cardBody}>
-                {/* Destino */}
                 <View style={styles.destinoContainer}>
                   <Package color="#7C3AED" size={16} />
                   <Text style={styles.destinoLabel}>Destino:</Text>
                   <Text style={styles.destinoText}>{entrega.destino}</Text>
                 </View>
-
-                {/* Creado por */}
                 <View style={styles.destinoContainer}>
                   <User color="#6B7280" size={16} />
                   <Text style={styles.destinoLabel}>Entregado por:</Text>
                   <Text style={styles.destinoText}>{entrega.creadoPor || 'usuario'}</Text>
                 </View>
-
-                {/* Notas si existen */}
-                {entrega.notas ? (
+                {entrega.notas && (
                   <View style={styles.destinoContainer}>
                     <Text style={styles.notasText}>📝 {entrega.notas}</Text>
                   </View>
-                ) : null}
-
-                {/* Información del pedido si está vinculada */}
+                )}
                 {isVinculada && pedidoInfo && (
                   <View style={styles.pedidoInfoContainer}>
                     <Text style={styles.pedidoInfoTitle}>Información del pedido:</Text>
@@ -408,16 +393,12 @@ export default function HistoryScreen() {
                     )}
                   </View>
                 )}
-
-                {/* Resumen rápido si no está expandido */}
                 {!isExpanded && entrega.items && entrega.items.length > 0 && (
                   <Text style={styles.itemsResume}>
                     {entrega.items.length}{' '}
                     {entrega.items.length === 1 ? 'medicamento' : 'medicamentos'}
                   </Text>
                 )}
-
-                {/* Lista detallada si está expandido */}
                 {isExpanded && entrega.items && entrega.items.length > 0 && (
                   <View style={styles.itemsContainer}>
                     <Text style={styles.itemsTitle}>Medicamentos entregados:</Text>
@@ -438,8 +419,6 @@ export default function HistoryScreen() {
                     ))}
                   </View>
                 )}
-
-                {/* Estado de la entrega */}
                 <View style={styles.totalsContainer}>
                   <Text style={styles.totalItems}>
                     Estado:{' '}
@@ -458,7 +437,6 @@ export default function HistoryScreen() {
         })
       )}
 
-      {/* Modal de filtros */}
       <Modal visible={showFilterModal} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingScrollView style={styles.modalContent}>
@@ -468,9 +446,7 @@ export default function HistoryScreen() {
                 <X color="#6B7280" size={24} />
               </TouchableOpacity>
             </View>
-
             <View style={styles.filterForm}>
-              {/* Filtro por destino */}
               <View style={styles.filterInputGroup}>
                 <Text style={styles.filterLabel}>Destino</Text>
                 <TextInput
@@ -481,8 +457,6 @@ export default function HistoryScreen() {
                   onChangeText={(text) => setTempFilters((prev) => ({ ...prev, destino: text }))}
                 />
               </View>
-
-              {/* Filtro por medicamento */}
               <View style={styles.filterInputGroup}>
                 <Text style={styles.filterLabel}>Medicamento</Text>
                 <TextInput
@@ -495,8 +469,6 @@ export default function HistoryScreen() {
                   }
                 />
               </View>
-
-              {/* Rango de fechas */}
               <Text style={styles.filterLabel}>Fecha de entrega</Text>
               <View style={styles.dateRangeContainer}>
                 <TouchableOpacity
@@ -529,20 +501,17 @@ export default function HistoryScreen() {
                   </Text>
                 </TouchableOpacity>
               </View>
-
-              {/* Botón para limpiar fechas */}
               {(tempFilters.fechaDesde || tempFilters.fechaHasta) && (
                 <TouchableOpacity
                   style={styles.clearDatesButton}
-                  onPress={() => {
-                    setTempFilters((prev) => ({ ...prev, fechaDesde: '', fechaHasta: '' }));
-                  }}
+                  onPress={() =>
+                    setTempFilters((prev) => ({ ...prev, fechaDesde: '', fechaHasta: '' }))
+                  }
                 >
                   <X color="#6B7280" size={14} />
                   <Text style={styles.clearDatesText}>Limpiar fechas</Text>
                 </TouchableOpacity>
               )}
-
               <View style={styles.modalButtons}>
                 <TouchableOpacity style={styles.clearAllButtonModal} onPress={clearFilters}>
                   <Text style={styles.clearAllButtonText}>Limpiar todo</Text>
@@ -557,7 +526,6 @@ export default function HistoryScreen() {
         </View>
       </Modal>
 
-      {/* DatePicker para fechas */}
       {showDatePicker && (
         <DateTimePicker
           value={new Date()}
