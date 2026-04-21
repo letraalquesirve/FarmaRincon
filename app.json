@@ -36,12 +36,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "517b7bd2-7129-4814-9f50-ba52736d9890"
+        "projectId": "d07e6590-5ce8-4d44-9a6b-f3f4c8f843fd"
       }
     },
-    "plugins": [
-      "expo-notifications",
-      "expo-sharing"
-    ]
+    "plugins": ["expo-notifications", "expo-sharing"]
   }
 }
