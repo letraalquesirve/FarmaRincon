@@ -38,6 +38,7 @@ import {
 } from 'lucide-react-native';
 import { pb } from '../services/PocketBaseConfig';
 import { sendLocalNotification } from '../services/NotificationService';
+import { useRoute } from '@react-navigation/native';
 
 export default function PedidosScreen({ user }) {
   const [pedidos, setPedidos] = useState([]);
@@ -68,6 +69,16 @@ export default function PedidosScreen({ user }) {
   const [zoomImage, setZoomImage] = useState(null);
   const [zoomMedName, setZoomMedName] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+
+  const route = useRoute();
+  const filterSolicitante = route.params?.filterSolicitante;
+
+  useEffect(() => {
+    if (filterSolicitante) {
+      setSearchTerm(filterSolicitante);
+      navigation.setParams({ filterSolicitante: null });
+    }
+  }, []);
 
   // Refs para evitar cargas duplicadas y manejar suscripciones
   const isLoadingRef = useRef(false);

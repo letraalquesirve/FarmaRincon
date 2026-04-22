@@ -31,6 +31,7 @@ import {
 import { pb } from '../services/PocketBaseConfig';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { sendLocalNotification } from '../services/NotificationService';
+import { useRoute } from '@react-navigation/native';
 
 export default function EntregasScreen({ user }) {
   const [entregas, setEntregas] = useState([]);
@@ -52,6 +53,15 @@ export default function EntregasScreen({ user }) {
   const [seleccionTemporalMed, setSeleccionTemporalMed] = useState([]);
   const [cantidadesTemp, setCantidadesTemp] = useState({});
   const [procesando, setProcesando] = useState(false);
+  const route = useRoute();
+  const filterDestino = route.params?.filterDestino;
+
+  useEffect(() => {
+    if (filterDestino) {
+      setSearchTerm(filterDestino);
+      navigation.setParams({ filterDestino: null });
+    }
+  }, []);
 
   // Refs para evitar cargas duplicadas y manejar suscripciones
   const isLoadingRef = useRef(false);
@@ -595,20 +605,7 @@ export default function EntregasScreen({ user }) {
                 multiline
               />
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Medicamentos a entregar</Text>
-                <TouchableOpacity
-                  style={styles.addMedButton}
-                  onPress={() => {
-                    setSeleccionTemporalMed([]);
-                    setCantidadesTemp({});
-                    setBusqueda('');
-                    setMedicamentosFiltrados([]);
-                    setShowSelectMedModal(true);
-                  }}
-                >
-                  <Plus size={20} color="#7C3AED" />
-                  <Text style={styles.addMedButtonText}>Agregar</Text>
-                </TouchableOpacity>
+                <Text style={styles.sectionTitle}>Medicamentos a entregar:</Text>
               </View>
               {medicamentosSeleccionados.length === 0 ? (
                 <View style={styles.emptyMedList}>

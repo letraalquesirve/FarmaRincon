@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const PB_URL = 'https://gp.letraalquesirve.org';
 
 export const pb = new PocketBase(PB_URL);
+pb.autoCancellation(false);
 
 // Configurar persistencia automática
 pb.authStore.onChange(() => {

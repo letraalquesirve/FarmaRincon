@@ -40,6 +40,7 @@ import { pb } from '../services/PocketBaseConfig';
 import DatePickerInput from '../components/DatePickerInput';
 import CategoriaPicker from '../components/CategoriaPicker';
 import { useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 
 // ── Utilidades ───────────────────────────────────────────────
 const normalizeText = (text) => {
@@ -103,6 +104,90 @@ export default function InventoryScreen({ user }) {
   const [cargandoInactivos, setCargandoInactivos] = useState(false);
   const [hayMasInactivos, setHayMasInactivos] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [filtroExacto, setFiltroExacto] = useState({ activo: false, nombre: '', presentacion: '' });
+  const navigation = useNavigation();
+
+  // Obtener parámetros de navegación
+  const route = useRoute();
+  const filterNombre = route.params?.filterNombre;
+  const filterPresentacion = route.params?.filterPresentacion;
+  const filterExacto = route.params?.filterExacto;
+
+  // Aplicar filtro al cargar
+  useEffect(() => {
+    if (filterNombre && filterExacto) {
+      // Búsqueda exacta: combinar nombre y presentación
+      const searchValue = filterPresentacion
+        ? `${filterNombre} ${filterPresentacion}`
+        : filterNombre;
+      setSearchTerm(searchValue);
+      // Limpiar el parámetro para que no se aplique de nuevo
+      navigation.setParams({ filterNombre: null, filterPresentacion: null, filterExacto: null });
+    }
+  }, []);
+
+  useEffect(() => {
+    const filterNombre = route.params?.filterNombre;
+    const filterPresentacion = route.params?.filterPresentacion;
+    const filterExactoParam = route.params?.filterExacto;
+
+    if (filterNombre && filterExactoParam) {
+      // Guardar filtro exacto
+      setFiltroExacto({
+        activo: true,
+        nombre: filterNombre,
+        presentacion: filterPresentacion,
+      });
+      // Limpiar búsqueda normal
+      setSearchTerm('');
+      // Limpiar parámetros
+      navigation.setParams({ filterNombre: null, filterPresentacion: null, filterExacto: null });
+    }
+  }, [route.params]);
+
+  // Modificar getFilteredMeds para usar filtro exacto cuando está activo
+  const getFilteredMeds = () => {
+    // Si hay filtro exacto activo desde HomeScreen
+    if (filtroExacto.activo) {
+      return activos.filter((m) => {
+        const nombreMatch = m.nombre === filtroExacto.nombre;
+        const presentacionMatch = filtroExacto.presentacion
+          ? m.presentacion === filtroExacto.presentacion
+          : true;
+        return nombreMatch && presentacionMatch;
+      });
+    }
+
+    // Filtro normal (búsqueda + estado)
+    let filtered = [...activos];
+
+    if (searchTerm) {
+      const searchNorm = normalizeText(searchTerm);
+      filtered = filtered.filter(
+        (m) =>
+          normalizeText(m.nombre).includes(searchNorm) ||
+          normalizeText(m.presentacion || '').includes(searchNorm) ||
+          normalizeText(m.categoria || '').includes(searchNorm) ||
+          normalizeText(m.ubicacion || '').includes(searchNorm)
+      );
+    }
+
+    switch (filter) {
+      case 'vigentes':
+        filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
+        break;
+      case 'porVencer':
+        filtered = filtered.filter((m) => {
+          const days = getDaysUntilExpiry(m.vencimiento);
+          return days >= 0 && days <= 30;
+        });
+        break;
+      case 'vencidos':
+        filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
+        break;
+    }
+    return filtered;
+  };
 
   // ── MEJORA 1: Ref para evitar cargas simultáneas ──
   const isLoadingRef = useRef(false);
@@ -670,7 +755,8 @@ export default function InventoryScreen({ user }) {
   };
 
   const userIsAdmin = isAdmin(user);
-  const medicamentosActivos = filteredActivos; // Para compatibilidad con el resto del código
+  //const medicamentosActivos = filteredActivos; // Para compatibilidad con el resto del código
+  const medicamentosActivos = getFilteredMeds();
 
   if (loading && activos.length === 0) {
     return (
@@ -873,6 +959,19 @@ export default function InventoryScreen({ user }) {
                 <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
               </TouchableOpacity>
             </View>
+            {filtroExacto.activo && (
+              <View style={styles.filtroExactoContainer}>
+                <Text style={styles.filtroExactoText}>
+                  Mostrando: {filtroExacto.nombre}
+                  {filtroExacto.presentacion ? ` ${filtroExacto.presentacion}` : ''}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setFiltroExacto({ activo: false, nombre: '', presentacion: '' })}
+                >
+                  <X size={16} color="#7C3AED" />
+                </TouchableOpacity>
+              </View>
+            )}
             {medicamentosActivos.map((med) => (
               <MedCard key={med.id} med={med} />
             ))}
@@ -896,7 +995,19 @@ export default function InventoryScreen({ user }) {
                 <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
               </TouchableOpacity>
             </View>
-
+            {filtroExacto.activo && (
+              <View style={styles.filtroExactoContainer}>
+                <Text style={styles.filtroExactoText}>
+                  Mostrando: {filtroExacto.nombre}
+                  {filtroExacto.presentacion ? ` ${filtroExacto.presentacion}` : ''}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setFiltroExacto({ activo: false, nombre: '', presentacion: '' })}
+                >
+                  <X size={16} color="#7C3AED" />
+                </TouchableOpacity>
+              </View>
+            )}
             {getFilteredInactivos().length === 0 && searchTerm ? (
               <View style={styles.emptyContainer}>
                 <Package color="#D1D5DB" size={64} />
@@ -1425,5 +1536,20 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
+  },
+  filtroExactoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#EDE9FE',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  filtroExactoText: {
+    fontSize: 12,
+    color: '#7C3AED',
+    fontWeight: '500',
   },
 });

@@ -1,5 +1,5 @@
 // src/screens/HomeScreen.js
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  Trash,
   Activity,
   Key,
   FileText,
@@ -25,8 +26,9 @@ import {
 } from 'lucide-react-native';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { pb } from '../services/PocketBaseConfig';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 
-export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogout }) {
+export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const [medicamentos, setMedicamentos] = useState([]);
   const [pedidosPendientes, setPedidosPendientes] = useState([]);
   const [entregasAbiertas, setEntregasAbiertas] = useState([]);
@@ -38,31 +40,19 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
+  const navigation = useNavigation();
 
-  // Refs para evitar cargas duplicadas y manejar suscripciones
-  const isLoadingRef = useRef(false);
-  const subscriptionsRef = useRef([]);
-
-  // ── Función de carga principal ──
-  const loadData = useCallback(async (isRefresh = false) => {
-    if (isLoadingRef.current) return;
-    isLoadingRef.current = true;
-
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-
+  // Cargar datos
+  const loadData = async () => {
     try {
       const [medicamentosResult, pedidosResult, entregasResult] = await Promise.all([
-        pb
-          .collection('medicamentos')
-          .getList(1, 1000, { sort: '-fechaRegistro', requestKey: null }),
+        pb.collection('medicamentos').getList(1, 1000, { sort: '-fechaRegistro' }),
         pb
           .collection('pedidos')
-          .getList(1, 100, { filter: 'atendido = false', sort: '-fechaPedido', requestKey: null }),
+          .getList(1, 100, { filter: 'atendido = false', sort: '-fechaPedido' }),
         pb.collection('entregas').getList(1, 100, {
-          filter: 'estado = "abierta"',
+          filter: 'estado = "abierta" && pedidoId = null',
           sort: '-fechaCreacion',
-          requestKey: null,
         }),
       ]);
 
@@ -70,55 +60,52 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       setPedidosPendientes(pedidosResult.items);
       setEntregasAbiertas(entregasResult.items);
     } catch (error) {
-      if (!error.isAbort) {
-        console.error('Error cargando datos:', error);
-        Alert.alert('Error', 'No se pudieron cargar los datos');
-      }
+      console.error('Error cargando datos:', error);
+      Alert.alert('Error', 'No se pudieron cargar los datos');
     } finally {
-      isLoadingRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  };
 
-  // ── Realtime subscriptions ──
-  const setupRealtimeSubscriptions = useCallback(() => {
-    // Limpiar suscripciones anteriores
-    subscriptionsRef.current.forEach((unsub) => unsub?.());
-    subscriptionsRef.current = [];
-
-    // Suscribirse a cambios en medicamentos
-    const medicamentosUnsub = pb.collection('medicamentos').subscribe('*', (e) => {
-      console.log('🔄 Cambio en medicamentos (Home):', e.action);
-      loadData();
-    });
-
-    // Suscribirse a cambios en pedidos
-    const pedidosUnsub = pb.collection('pedidos').subscribe('*', (e) => {
-      console.log('🔄 Cambio en pedidos (Home):', e.action);
-      loadData();
-    });
-
-    // Suscribirse a cambios en entregas
-    const entregasUnsub = pb.collection('entregas').subscribe('*', (e) => {
-      console.log('🔄 Cambio en entregas (Home):', e.action);
-      loadData();
-    });
-
-    subscriptionsRef.current = [medicamentosUnsub, pedidosUnsub, entregasUnsub];
-  }, [loadData]);
-
-  // Cargar datos iniciales y setup realtime
+  // Carga inicial
   useEffect(() => {
     loadData();
-    setupRealtimeSubscriptions();
+  }, []);
 
-    return () => {
-      subscriptionsRef.current.forEach((unsub) => unsub?.());
-    };
-  }, [loadData, setupRealtimeSubscriptions]);
+  // Recargar cuando la pantalla recibe foco
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [])
+  );
 
-  const onRefresh = useCallback(() => loadData(true), [loadData]);
+  // Pull-to-refresh
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData();
+  }, []);
+
+  // Navegación con filtros exactos
+  const navigateToInventoryWithFilter = (medicamento) => {
+    navigation.navigate('Inventario', {
+      filterNombre: medicamento.nombre,
+      filterPresentacion: medicamento.presentacion || '',
+      filterExacto: true,
+    });
+  };
+
+  const navigateToPedidosWithFilter = (pedido) => {
+    navigation.navigate('Pedidos', {
+      filterSolicitante: pedido.nombreSolicitante,
+    });
+  };
+
+  const navigateToEntregasWithFilter = (entrega) => {
+    navigation.navigate('Entregas', {
+      filterDestino: entrega.destino,
+    });
+  };
 
   const handleUserPress = () => {
     Alert.alert('Cerrar Sesión', `¿Deseas cerrar la sesión de ${user?.nombre || 'usuario'}?`, [
@@ -139,6 +126,7 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           onPress: async () => {
             try {
               await pb.collection('medicamentos').delete(medId);
+              await loadData();
               Alert.alert('Éxito', 'Medicamento eliminado permanentemente');
             } catch (error) {
               Alert.alert('Error', 'No se pudo eliminar');
@@ -242,7 +230,9 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       const today = new Date().toLocaleDateString('es-ES');
       let tableRows = '';
       pedidosList.forEach((pedido, index) => {
-        tableRows += `<tr><td>${index + 1}</td><td>${escapeHtml(pedido.nombreSolicitante || '')}</td><td>${pedido.medicamentosSolicitados?.length || 0}</td><td>${new Date(pedido.fechaPedido).toLocaleDateString()}</td></tr>`;
+        tableRows += `<tr><td>${index + 1}</td><td>${escapeHtml(pedido.nombreSolicitante || '')}</td>
+          <td>${pedido.medicamentosSolicitados?.length || 0}</td>
+          <td>${new Date(pedido.fechaPedido).toLocaleDateString()}</td></tr>`;
       });
       const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
         <style>body{font-family:Arial;padding:20px}th{background:#7C3AED;color:white}</style></head>
@@ -263,7 +253,9 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
       const today = new Date().toLocaleDateString('es-ES');
       let tableRows = '';
       entregasList.forEach((entrega, index) => {
-        tableRows += `<tr><td>${index + 1}</td><td>${escapeHtml(entrega.destino || '')}</td><td>${entrega.items?.length || 0}</td><td>${new Date(entrega.fechaCreacion).toLocaleDateString()}</td></tr>`;
+        tableRows += `<tr><td>${index + 1}</td><td>${escapeHtml(entrega.destino || '')}</td>
+          <td>${entrega.items?.length || 0}</td>
+          <td>${new Date(entrega.fechaCreacion).toLocaleDateString()}</td></tr>`;
       });
       const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
         <style>body{font-family:Arial;padding:20px}th{background:#EA580C;color:white}</style></head>
@@ -395,6 +387,7 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
         </TouchableOpacity>
       </View>
 
+      {/* Stats Grid */}
       <View style={styles.statsGrid}>
         <TouchableOpacity style={styles.statCard} onPress={handlePDFActivos}>
           <Text style={styles.statNumber}>{medicamentosActivos.length}</Text>
@@ -421,6 +414,7 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
         </TouchableOpacity>
       </View>
 
+      {/* Pedidos Pendientes */}
       {pedidosPendientes.length > 0 && (
         <View style={styles.section}>
           <TouchableOpacity
@@ -440,16 +434,22 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           </TouchableOpacity>
           {showPedidosPendientes &&
             pedidosPendientes.map((pedido) => (
-              <View key={pedido.id} style={styles.pedidoCardCompacto}>
+              <TouchableOpacity
+                key={pedido.id}
+                style={styles.pedidoCardCompacto}
+                onPress={() => navigateToPedidosWithFilter(pedido)}
+                activeOpacity={0.7}
+              >
                 <Text style={styles.pedidoNombreCompacto}>{pedido.nombreSolicitante}</Text>
                 <Text style={styles.pedidoInfoCompacto}>
                   {pedido.medicamentosSolicitados?.length || 0} medicamentos
                 </Text>
-              </View>
+              </TouchableOpacity>
             ))}
         </View>
       )}
 
+      {/* Entregas Abiertas */}
       {entregasAbiertas.length > 0 && (
         <View style={styles.section}>
           <TouchableOpacity
@@ -469,16 +469,22 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           </TouchableOpacity>
           {showEntregasAbiertas &&
             entregasAbiertas.map((entrega) => (
-              <View key={entrega.id} style={styles.entregaCardCompacto}>
+              <TouchableOpacity
+                key={entrega.id}
+                style={styles.entregaCardCompacto}
+                onPress={() => navigateToEntregasWithFilter(entrega)}
+                activeOpacity={0.7}
+              >
                 <Text style={styles.entregaDestinoCompacto}>{entrega.destino}</Text>
                 <Text style={styles.entregaInfoCompacto}>
                   {entrega.items?.length || 0} medicamentos
                 </Text>
-              </View>
+              </TouchableOpacity>
             ))}
         </View>
       )}
 
+      {/* Por vencer */}
       {medicamentosPorVencer.length > 0 && (
         <View style={styles.section}>
           <TouchableOpacity
@@ -502,11 +508,18 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           </TouchableOpacity>
           {showPorVencer &&
             medicamentosPorVencer.map((med) => (
-              <MedicamentoCard key={med.id} med={med} status="porVencer" />
+              <TouchableOpacity
+                key={med.id}
+                onPress={() => navigateToInventoryWithFilter(med)}
+                activeOpacity={0.7}
+              >
+                <MedicamentoCard med={med} status="porVencer" />
+              </TouchableOpacity>
             ))}
         </View>
       )}
 
+      {/* Vencidos */}
       {medicamentosVencidos.length > 0 && (
         <View style={styles.section}>
           <TouchableOpacity
@@ -530,7 +543,13 @@ export default function HomeScreen({ navigation, onOpenApiKeyModal, user, onLogo
           </TouchableOpacity>
           {showVencidos &&
             medicamentosVencidos.map((med) => (
-              <MedicamentoCard key={med.id} med={med} status="vencido" />
+              <TouchableOpacity
+                key={med.id}
+                onPress={() => navigateToInventoryWithFilter(med)}
+                activeOpacity={0.7}
+              >
+                <MedicamentoCard med={med} status="vencido" />
+              </TouchableOpacity>
             ))}
         </View>
       )}
