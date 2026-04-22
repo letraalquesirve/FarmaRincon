@@ -30,6 +30,8 @@ import PedidosScreen from './src/screens/PedidosScreen';
 import EntregasScreen from './src/screens/EntregasScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
 import LoginModal from './src/components/LoginModal';
+import { initDatabase } from './src/services/SQLiteService';
+import { startPeriodicSync, syncWithServer } from './src/services/SyncService';
 
 LogBox.ignoreLogs(['Setting a timer for a long period of time']);
 
@@ -64,6 +66,26 @@ export default function App() {
         }
       }, 100);
     }
+  }, []);
+
+  useEffect(() => {
+    const initialize = async () => {
+      // Inicializar SQLite
+      await initDatabase();
+
+      // Iniciar sincronización periódica
+      startPeriodicSync(30000); // cada 30 segundos
+
+      // Sincronizar al iniciar
+      await syncWithServer();
+    };
+
+    initialize();
+
+    return () => {
+      // Limpiar al cerrar la app
+      // stopPeriodicSync();
+    };
   }, []);
 
   const checkApiKey = async () => {

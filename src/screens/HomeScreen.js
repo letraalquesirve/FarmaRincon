@@ -27,7 +27,7 @@ import {
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { pb } from '../services/PocketBaseConfig';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-
+import ImportBackupButton from '../components/ImportBackupButton';
 export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const [medicamentos, setMedicamentos] = useState([]);
   const [pedidosPendientes, setPedidosPendientes] = useState([]);
@@ -553,6 +553,7 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
             ))}
         </View>
       )}
+      {__DEV__ && <ImportBackupButton onComplete={onRefresh} />}
     </ScrollView>
   );
 }
