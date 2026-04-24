@@ -6,7 +6,7 @@ import PocketBase from 'pocketbase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const PB_URL = 'https://gp.letraalquesirve.org';
-
+//const PB_URL = 'http://localhost:8090';
 export const pb = new PocketBase(PB_URL);
 pb.autoCancellation(false);
 
