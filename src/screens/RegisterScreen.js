@@ -112,7 +112,7 @@ export default function RegisterScreen({ user }) {
   };
   const cargarUltimoMedicamento = async () => {
     try {
-      const result = await pb.collection('medicamentos').getList(1, 1, { sort: '-fechaRegistro' });
+      const result = await pb.collection('medicamentos').getList(1, 1, { sort: '-fecharegistro' });
       setUltimoMedicamento(result.items.length > 0 ? result.items[0] : null);
     } catch (error) {
       console.error('Error cargando último medicamento:', error);

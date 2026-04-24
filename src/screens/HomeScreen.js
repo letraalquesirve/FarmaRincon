@@ -46,13 +46,13 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const loadData = async () => {
     try {
       const [medicamentosResult, pedidosResult, entregasResult] = await Promise.all([
-        pb.collection('medicamentos').getList(1, 1000, { sort: '-fechaRegistro' }),
+        pb.collection('medicamentos').getList(1, 1000, { sort: '-fecharegistro' }),
         pb
           .collection('pedidos')
-          .getList(1, 100, { filter: 'atendido = false', sort: '-fechaPedido' }),
+          .getList(1, 100, { filter: 'atendido = false', sort: '-fechapedido' }),
         pb.collection('entregas').getList(1, 100, {
-          filter: 'estado = "abierta" && pedidoId = null',
-          sort: '-fechaCreacion',
+          filter: 'estado = "abierta" && pedidoid = null',
+          sort: '-fechacreacion',
         }),
       ]);
 

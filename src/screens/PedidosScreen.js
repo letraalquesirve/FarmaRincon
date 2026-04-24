@@ -96,8 +96,8 @@ export default function PedidosScreen({ user }) {
 
     try {
       const [pedidosResult, entregasResult, medicamentosResult] = await Promise.all([
-        pb.collection('pedidos').getList(1, 100, { sort: '-fechaPedido', requestKey: null }),
-        pb.collection('entregas').getList(1, 100, { sort: '-fechaCreacion', requestKey: null }),
+        pb.collection('pedidos').getList(1, 100, { sort: '-fechapedido', requestKey: null }),
+        pb.collection('entregas').getList(1, 100, { sort: '-fechacreacion', requestKey: null }),
         pb
           .collection('medicamentos')
           .getList(1, 500, { filter: 'activo = true', sort: 'nombre', requestKey: null }),

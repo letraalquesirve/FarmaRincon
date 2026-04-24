@@ -79,7 +79,7 @@ export default function EntregasScreen({ user }) {
 
     try {
       const [entregasResult, medicamentosResult] = await Promise.all([
-        pb.collection('entregas').getList(1, 100, { sort: '-fechaCreacion', requestKey: null }),
+        pb.collection('entregas').getList(1, 100, { sort: '-fechacreacion', requestKey: null }),
         pb
           .collection('medicamentos')
           .getList(1, 500, { filter: 'activo = true', sort: 'nombre', requestKey: null }),
@@ -231,7 +231,7 @@ export default function EntregasScreen({ user }) {
     if (!destino.trim()) return null;
     try {
       const result = await pb.collection('entregas').getList(1, 1, {
-        filter: `destino = "${destino.trim()}" && pedidoId = null && estado = "abierta"`,
+        filter: `destino = "${destino.trim()}" && pedidoid = null && estado = "abierta"`,
         requestKey: null,
       });
       return result.items.length > 0 ? result.items[0] : null;

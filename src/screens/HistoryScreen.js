@@ -84,8 +84,8 @@ export default function HistoryScreen() {
 
     try {
       const [entregasResult, pedidosResult] = await Promise.all([
-        pb.collection('entregas').getList(1, 200, { sort: '-fechaCreacion', requestKey: null }),
-        pb.collection('pedidos').getList(1, 200, { sort: '-fechaPedido', requestKey: null }),
+        pb.collection('entregas').getList(1, 200, { sort: '-fechacreacion', requestKey: null }),
+        pb.collection('pedidos').getList(1, 200, { sort: '-fechapedido', requestKey: null }),
       ]);
 
       const entregasWithTotal = entregasResult.items.map((item) => ({
