@@ -1,5 +1,6 @@
 //const PB_URL = 'http://192.168.1.101:8090'; wifi ATT
 //return 'http://10.142.75.89:8090'; //hotspot Pixel
+//const PB_URL = 'https://gp.letraalquesirve.org';
 
 // src/services/PocketBaseConfig.js
 import PocketBase from 'pocketbase';
@@ -35,4 +36,16 @@ export const loadStoredAuth = async () => {
     console.error('Error cargando autenticación:', error);
   }
   return false;
+};
+
+// ✅ Agregar autenticación de admin
+export const authenticateAdmin = async () => {
+  try {
+    await pb.admins.authWithPassword('geovanis.pantoja@letraalquesirve.org', 'vpsElyon8888*');
+    console.log('✅ Admin autenticado');
+    return true;
+  } catch (error) {
+    console.error('❌ Error autenticando admin:', error.message);
+    return false;
+  }
 };

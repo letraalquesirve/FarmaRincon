@@ -1,24 +1,29 @@
+// src/services/AuthService.js
+//import { pb } from './PocketBaseConfig';
 import { pb } from '../services/PocketBaseConfig';
 
-// Normalizar texto para búsqueda case-insensitive
 const normalizeText = (text) => {
   if (!text) return '';
   return text.toLowerCase().trim();
 };
 
-// Verificar usuario en Firestore
+// Verificar usuario en PocketBase
 export async function verifyUser(username) {
   try {
     const normalizedUsername = normalizeText(username);
-    const userRef = doc(db, 'usuarios', normalizedUsername);
-    const userDoc = await getDoc(userRef);
 
-    if (userDoc.exists()) {
+    const result = await pb.collection('usuarios').getList(1, 1, {
+      filter: `nombre = "${normalizedUsername}"`,
+    });
+
+    if (result.items.length > 0) {
+      const user = result.items[0];
       return {
         success: true,
         user: {
-          nombre: userDoc.data().nombre,
-          tipo: userDoc.data().tipo,
+          id: user.id,
+          nombre: user.nombre,
+          tipo: user.tipo || 'user',
         },
       };
     } else {

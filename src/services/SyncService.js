@@ -10,7 +10,6 @@ let isSyncing = false;
 // Verificar si PocketBase está disponible
 export const isPocketBaseAvailable = async () => {
   try {
-    // Timeout de 5 segundos
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
@@ -70,15 +69,11 @@ const syncServerToLocal = async () => {
 
   for (const collectionName of collections) {
     try {
-      // Obtener registros del servidor (solo los actualizados recientemente)
-      const fiveMinutesAgo = new Date();
-      fiveMinutesAgo.setMinutes(fiveMinutesAgo.getMinutes() - 5);
-
       const serverRecords = await pb.collection(collectionName).getFullList({
-        filter: `updatedAt > "${fiveMinutesAgo.toISOString()}"`,
-        sort: 'updatedAt',
         requestKey: null,
       });
+
+      console.log(`📥 ${collectionName}: ${serverRecords.length} registros del servidor`);
 
       // Obtener registros locales
       let localRecords = [];
@@ -99,13 +94,12 @@ const syncServerToLocal = async () => {
 
       const localMap = new Map(localRecords.map((r) => [r.id, r]));
 
-      // Aplicar cambios LWW
       for (const serverRecord of serverRecords) {
         const localRecord = localMap.get(serverRecord.id);
+        const serverUpdated = serverRecord.updated;
+        const localUpdated = localRecord?.updated;
 
-        // Si no existe localmente o el servidor es más reciente
-        if (!localRecord || new Date(serverRecord.updatedAt) > new Date(localRecord.updatedAt)) {
-          // Guardar localmente (marcado como synced porque viene del servidor)
+        if (!localRecord || new Date(serverUpdated) > new Date(localUpdated)) {
           switch (collectionName) {
             case 'medicamentos':
               await SQLiteService.saveMedicamento(serverRecord, 'synced', null);
@@ -152,10 +146,7 @@ export const syncWithServer = async () => {
 
     console.log('🔄 Iniciando sincronización con servidor...');
 
-    // Paso 1: Subir operaciones pendientes
     const pendingSynced = await syncPendingOperations();
-
-    // Paso 2: Descargar cambios del servidor
     const serverUpdated = await syncServerToLocal();
 
     console.log(
@@ -171,7 +162,7 @@ export const syncWithServer = async () => {
   }
 };
 
-// Iniciar sincronización periódica (cada 30 segundos)
+// Iniciar sincronización periódica
 export const startPeriodicSync = (intervalMs = 30000) => {
   if (syncInterval) clearInterval(syncInterval);
 
@@ -182,13 +173,61 @@ export const startPeriodicSync = (intervalMs = 30000) => {
   console.log(`🔄 Sincronización periódica iniciada (cada ${intervalMs / 1000}s)`);
 };
 
-// Detener sincronización periódica
+// ✅ EXPORTADA - Detener sincronización periódica
 export const stopPeriodicSync = () => {
   if (syncInterval) {
     clearInterval(syncInterval);
     syncInterval = null;
     console.log('🛑 Sincronización periódica detenida');
   }
+};
+
+// Sincronización inicial completa
+export const initialFullSync = async () => {
+  console.log('📥 Sincronización inicial completa...');
+
+  try {
+    await pb.admins.authWithPassword('geovanis.pantoja@letraalquesirve.org', 'vpsElyon8888*');
+    console.log('✅ Autenticado para sync inicial');
+  } catch (error) {
+    console.error('❌ Error autenticando para sync:', error.message);
+    return;
+  }
+
+  const collections = ['medicamentos', 'pedidos', 'entregas', 'usuarios'];
+
+  for (const collectionName of collections) {
+    try {
+      const records = await pb.collection(collectionName).getFullList({
+        sort: 'created',
+        requestKey: null,
+      });
+
+      console.log(`   📥 ${collectionName}: ${records.length} registros`);
+
+      for (const record of records) {
+        switch (collectionName) {
+          case 'medicamentos':
+            await SQLiteService.saveMedicamento(record, 'synced', null);
+            break;
+          case 'pedidos':
+            await SQLiteService.savePedido(record, 'synced', null);
+            break;
+          case 'entregas':
+            await SQLiteService.saveEntrega(record, 'synced', null);
+            break;
+          case 'usuarios':
+            await SQLiteService.saveUsuario(record, 'synced', null);
+            break;
+        }
+      }
+      console.log(`   ✅ ${records.length} ${collectionName} sincronizados`);
+    } catch (error) {
+      console.error(`Error en sync inicial de ${collectionName}:`, error.message);
+    }
+  }
+
+  console.log('🎉 Sincronización inicial completada');
 };
 
 // Sincronización manual (para pull-to-refresh)
