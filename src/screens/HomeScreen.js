@@ -440,9 +440,9 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
                 onPress={() => navigateToPedidosWithFilter(pedido)}
                 activeOpacity={0.7}
               >
-                <Text style={styles.pedidoNombreCompacto}>{pedido.nombreSolicitante}</Text>
+                <Text style={styles.pedidoNombreCompacto}>{pedido.nombresolicitante}</Text>
                 <Text style={styles.pedidoInfoCompacto}>
-                  {pedido.medicamentosSolicitados?.length || 0} medicamentos
+                  {pedido.medicamentossolicitados?.length || 0} medicamentos
                 </Text>
               </TouchableOpacity>
             ))}

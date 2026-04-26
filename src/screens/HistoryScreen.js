@@ -30,7 +30,9 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 import { pb } from '../services/PocketBaseConfig';
+import { useFocusEffect } from '@react-navigation/native';
 
+// ── Utilidades ───────────────────────────────────────────────
 const normalizeText = (text) => {
   if (!text) return '';
   return text
@@ -52,7 +54,7 @@ export default function HistoryScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedIds, setExpandedIds] = useState([]);
-  const [filter, setFilter] = useState('todas');
+  const [filter, setFilter] = useState('todas'); // 'todas', 'vinculadas', 'huerfanas'
 
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [filters, setFilters] = useState({
@@ -70,11 +72,36 @@ export default function HistoryScreen() {
   const [showDatePicker, setShowDatePicker] = useState(null);
   const [activeFiltersCount, setActiveFiltersCount] = useState(0);
 
-  // Refs para evitar cargas duplicadas y manejar suscripciones
+  // Ref para evitar cargas simultáneas
   const isLoadingRef = useRef(false);
-  const subscriptionsRef = useRef([]);
 
-  // ── Función de carga principal ──
+  // ── Formatear fechas para mostrar ──────────────────────────
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Fecha desconocida';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('es-ES', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  // ── Obtener información del pedido (con nombres en minúsculas) ──
+  const getPedidoInfo = (pedidoId) => {
+    if (!pedidoId) return null;
+    const pedido = pedidos.find((p) => p.id === pedidoId);
+    if (!pedido) return null;
+    return {
+      id: pedido.id,
+      nombresolicitante: pedido.nombresolicitante || 'Desconocido',
+      lugaresidencia: pedido.lugaresidencia || '',
+      telefonocontacto: pedido.telefonocontacto || '',
+    };
+  };
+
+  // ── Cargar datos desde PocketBase ──────────────────────────
   const loadData = useCallback(async (isRefresh = false) => {
     if (isLoadingRef.current) return;
     isLoadingRef.current = true;
@@ -88,6 +115,7 @@ export default function HistoryScreen() {
         pb.collection('pedidos').getList(1, 200, { sort: '-fechapedido', requestKey: null }),
       ]);
 
+      // Calcular total de unidades por entrega
       const entregasWithTotal = entregasResult.items.map((item) => ({
         ...item,
         totalUnidades: (item.items || []).reduce((sum, i) => sum + (i.cantidad || 1), 0),
@@ -98,6 +126,7 @@ export default function HistoryScreen() {
     } catch (error) {
       if (!error.isAbort) {
         console.error('Error cargando datos:', error);
+        Alert.alert('Error', 'No se pudieron cargar los datos');
       }
     } finally {
       isLoadingRef.current = false;
@@ -106,77 +135,61 @@ export default function HistoryScreen() {
     }
   }, []);
 
-  // ── Realtime subscriptions ──
-  const setupRealtimeSubscriptions = useCallback(() => {
-    // Limpiar suscripciones anteriores
-    subscriptionsRef.current.forEach((unsub) => unsub?.());
-    subscriptionsRef.current = [];
-
-    // Suscribirse a cambios en entregas
-    const entregasUnsub = pb.collection('entregas').subscribe('*', (e) => {
-      console.log('🔄 Cambio en entregas (History):', e.action, e.record?.id);
+  // Refrescar cada vez que la pantalla recibe foco
+  useFocusEffect(
+    useCallback(() => {
+      console.log('🔄 Historial: recargando datos');
       loadData();
-    });
+    }, [loadData])
+  );
 
-    // Suscribirse a cambios en pedidos
-    const pedidosUnsub = pb.collection('pedidos').subscribe('*', (e) => {
-      console.log('🔄 Cambio en pedidos (History):', e.action);
-      loadData();
-    });
-
-    subscriptionsRef.current = [entregasUnsub, pedidosUnsub];
-  }, [loadData]);
-
-  // Cargar datos iniciales y setup realtime
+  // ── Carga inicial y refrescar al foco (sin realtime) ──────
   useEffect(() => {
     loadData();
-    setupRealtimeSubscriptions();
+  }, [loadData]);
 
-    return () => {
-      subscriptionsRef.current.forEach((unsub) => unsub?.());
-    };
-  }, [loadData, setupRealtimeSubscriptions]);
-
+  // Pull-to-refresh
   const onRefresh = useCallback(() => loadData(true), [loadData]);
 
-  const formatDate = (dateString) => {
-    if (!dateString) return 'Fecha desconocida';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('es-ES', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
-  const getPedidoInfo = (pedidoId) => pedidos.find((p) => p.id === pedidoId);
-
+  // ── Filtros ──────────────────────────────────────────────
   const getFilteredEntregas = () => {
     let filtered = [...entregas];
-    if (filter === 'vinculadas') filtered = filtered.filter((e) => e.pedidoId);
-    else if (filter === 'huerfanas') filtered = filtered.filter((e) => !e.pedidoId);
+
+    // Filtro por tipo (todas, vinculadas, huerfanas)
+    if (filter === 'vinculadas') {
+      filtered = filtered.filter((e) => e.pedidoid && e.pedidoid !== '');
+    } else if (filter === 'huerfanas') {
+      filtered = filtered.filter((e) => !e.pedidoid || e.pedidoid === '');
+    }
+
+    // Filtro por destino
     if (filters.destino.trim()) {
       const searchNorm = normalizeText(filters.destino);
       filtered = filtered.filter((e) => normalizeText(e.destino || '').includes(searchNorm));
     }
+
+    // Filtro por medicamento
     if (filters.medicamento.trim()) {
       const searchNorm = normalizeText(filters.medicamento);
       filtered = filtered.filter((e) =>
         e.items?.some((item) => normalizeText(item.nombre).includes(searchNorm))
       );
     }
+
+    // Filtro por fecha desde
     if (filters.fechaDesde) {
       const desde = new Date(filters.fechaDesde);
       desde.setHours(0, 0, 0, 0);
-      filtered = filtered.filter((e) => new Date(e.fechaCreacion) >= desde);
+      filtered = filtered.filter((e) => new Date(e.fechacreacion) >= desde);
     }
+
+    // Filtro por fecha hasta
     if (filters.fechaHasta) {
       const hasta = new Date(filters.fechaHasta);
       hasta.setHours(23, 59, 59, 999);
-      filtered = filtered.filter((e) => new Date(e.fechaCreacion) <= hasta);
+      filtered = filtered.filter((e) => new Date(e.fechacreacion) <= hasta);
     }
+
     return filtered;
   };
 
@@ -226,10 +239,11 @@ export default function HistoryScreen() {
     );
   };
 
-  const filteredEntregas = getFilteredEntregas();
+  // ── Estadísticas ───────────────────────────────────────────
   const totalEntregas = entregas.length;
-  const vinculadasCount = entregas.filter((e) => e.pedidoId).length;
-  const huerfanasCount = entregas.filter((e) => !e.pedidoId).length;
+  const vinculadasCount = entregas.filter((e) => e.pedidoid && e.pedidoid !== '').length;
+  const huerfanasCount = entregas.filter((e) => !e.pedidoid || e.pedidoid === '').length;
+  const filteredEntregas = getFilteredEntregas();
 
   if (loading) {
     return (
@@ -245,6 +259,7 @@ export default function HistoryScreen() {
       style={styles.container}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
+      {/* Header */}
       <View style={styles.header}>
         <History color="#7C3AED" size={28} />
         <Text style={styles.title}>Historial de Entregas</Text>
@@ -258,6 +273,7 @@ export default function HistoryScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Filtros rápidos */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
         <TouchableOpacity
           style={[styles.filterChip, filter === 'todas' && styles.filterChipActive]}
@@ -289,6 +305,7 @@ export default function HistoryScreen() {
         </TouchableOpacity>
       </ScrollView>
 
+      {/* Contador de resultados */}
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
           <Text style={styles.statNumber}>{filteredEntregas.length}</Text>
@@ -304,6 +321,7 @@ export default function HistoryScreen() {
         )}
       </View>
 
+      {/* Lista de entregas */}
       {filteredEntregas.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Package color="#D1D5DB" size={64} />
@@ -326,14 +344,15 @@ export default function HistoryScreen() {
       ) : (
         filteredEntregas.map((entrega) => {
           const isExpanded = expandedIds.includes(entrega.id);
-          const pedidoInfo = entrega.pedidoId ? getPedidoInfo(entrega.pedidoId) : null;
-          const isVinculada = !!entrega.pedidoId;
+          const pedidoInfo = entrega.pedidoid ? getPedidoInfo(entrega.pedidoid) : null;
+          const isVinculada = !!(entrega.pedidoid && entrega.pedidoid !== '');
+
           return (
             <View key={entrega.id} style={styles.card}>
               <TouchableOpacity style={styles.cardHeader} onPress={() => toggleExpand(entrega.id)}>
                 <View style={styles.cardHeaderLeft}>
                   <Calendar color="#6B7280" size={16} />
-                  <Text style={styles.cardDate}>{formatDate(entrega.fechaCreacion)}</Text>
+                  <Text style={styles.cardDate}>{formatDate(entrega.fechacreacion)}</Text>
                 </View>
                 <View style={styles.cardHeaderRight}>
                   <View
@@ -353,52 +372,58 @@ export default function HistoryScreen() {
                   )}
                 </View>
               </TouchableOpacity>
+
               <View style={styles.cardBody}>
                 <View style={styles.destinoContainer}>
                   <Package color="#7C3AED" size={16} />
                   <Text style={styles.destinoLabel}>Destino:</Text>
                   <Text style={styles.destinoText}>{entrega.destino}</Text>
                 </View>
+
                 <View style={styles.destinoContainer}>
                   <User color="#6B7280" size={16} />
                   <Text style={styles.destinoLabel}>Entregado por:</Text>
-                  <Text style={styles.destinoText}>{entrega.creadoPor || 'usuario'}</Text>
+                  <Text style={styles.destinoText}>{entrega.creadopor || 'usuario'}</Text>
                 </View>
+
                 {entrega.notas && (
                   <View style={styles.destinoContainer}>
                     <Text style={styles.notasText}>📝 {entrega.notas}</Text>
                   </View>
                 )}
+
                 {isVinculada && pedidoInfo && (
                   <View style={styles.pedidoInfoContainer}>
                     <Text style={styles.pedidoInfoTitle}>Información del pedido:</Text>
                     <View style={styles.pedidoInfoRow}>
                       <Tag color="#6B7280" size={12} />
                       <Text style={styles.pedidoInfoLabel}>Solicitante:</Text>
-                      <Text style={styles.pedidoInfoValue}>{pedidoInfo.nombreSolicitante}</Text>
+                      <Text style={styles.pedidoInfoValue}>{pedidoInfo.nombresolicitante}</Text>
                     </View>
-                    {pedidoInfo.lugarResidencia && (
+                    {pedidoInfo.lugaresidencia && (
                       <View style={styles.pedidoInfoRow}>
                         <MapPin color="#6B7280" size={12} />
                         <Text style={styles.pedidoInfoLabel}>Residencia:</Text>
-                        <Text style={styles.pedidoInfoValue}>{pedidoInfo.lugarResidencia}</Text>
+                        <Text style={styles.pedidoInfoValue}>{pedidoInfo.lugaresidencia}</Text>
                       </View>
                     )}
-                    {pedidoInfo.telefonoContacto && (
+                    {pedidoInfo.telefonocontacto && (
                       <View style={styles.pedidoInfoRow}>
                         <Phone color="#6B7280" size={12} />
                         <Text style={styles.pedidoInfoLabel}>Contacto:</Text>
-                        <Text style={styles.pedidoInfoValue}>{pedidoInfo.telefonoContacto}</Text>
+                        <Text style={styles.pedidoInfoValue}>{pedidoInfo.telefonocontacto}</Text>
                       </View>
                     )}
                   </View>
                 )}
+
                 {!isExpanded && entrega.items && entrega.items.length > 0 && (
                   <Text style={styles.itemsResume}>
                     {entrega.items.length}{' '}
                     {entrega.items.length === 1 ? 'medicamento' : 'medicamentos'}
                   </Text>
                 )}
+
                 {isExpanded && entrega.items && entrega.items.length > 0 && (
                   <View style={styles.itemsContainer}>
                     <Text style={styles.itemsTitle}>Medicamentos entregados:</Text>
@@ -419,10 +444,11 @@ export default function HistoryScreen() {
                     ))}
                   </View>
                 )}
+
                 <View style={styles.totalsContainer}>
                   <Text style={styles.totalItems}>
                     Estado:{' '}
-                    {entrega.estado === 'abierta' && !entrega.pedidoId
+                    {entrega.estado === 'abierta' && !entrega.pedidoid
                       ? '🟡 Abierta'
                       : '🔒 Cerrada'}
                   </Text>
@@ -437,6 +463,7 @@ export default function HistoryScreen() {
         })
       )}
 
+      {/* Modal de filtros */}
       <Modal visible={showFilterModal} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingScrollView style={styles.modalContent}>
@@ -538,6 +565,7 @@ export default function HistoryScreen() {
   );
 }
 
+// ── Estilos ───────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },

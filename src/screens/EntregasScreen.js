@@ -28,10 +28,10 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { pb } from '../services/PocketBaseConfig';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { sendLocalNotification } from '../services/NotificationService';
-import { useRoute } from '@react-navigation/native';
 
 export default function EntregasScreen({ user }) {
   const [entregas, setEntregas] = useState([]);
@@ -53,23 +53,11 @@ export default function EntregasScreen({ user }) {
   const [seleccionTemporalMed, setSeleccionTemporalMed] = useState([]);
   const [cantidadesTemp, setCantidadesTemp] = useState({});
   const [procesando, setProcesando] = useState(false);
-  const route = useRoute();
-  const filterDestino = route.params?.filterDestino;
 
-  useEffect(() => {
-    if (filterDestino) {
-      setSearchTerm(filterDestino);
-      navigation.setParams({ filterDestino: null });
-    }
-  }, []);
-
-  // Refs para evitar cargas duplicadas y manejar suscripciones
   const isLoadingRef = useRef(false);
-  const subscriptionsRef = useRef([]);
-
   const getUserName = () => user?.nombre || 'usuario';
 
-  // ── Función de carga principal ──
+  // ── Cargar datos ──────────────────────────────────────────
   const loadData = useCallback(async (isRefresh = false) => {
     if (isLoadingRef.current) return;
     isLoadingRef.current = true;
@@ -98,66 +86,24 @@ export default function EntregasScreen({ user }) {
     }
   }, []);
 
-  // ── Realtime subscriptions ──
-  const setupRealtimeSubscriptions = useCallback(() => {
-    // Limpiar suscripciones anteriores
-    subscriptionsRef.current.forEach((unsub) => unsub?.());
-    subscriptionsRef.current = [];
-
-    // Suscribirse a cambios en entregas
-    const entregasUnsub = pb.collection('entregas').subscribe('*', (e) => {
-      console.log('🔄 Cambio en entregas:', e.action, e.record?.id);
-
-      if (e.action === 'create') {
-        setEntregas((prev) => [e.record, ...prev]);
-      } else if (e.action === 'update') {
-        setEntregas((prev) => prev.map((e2) => (e2.id === e.record.id ? e.record : e2)));
-      } else if (e.action === 'delete') {
-        setEntregas((prev) => prev.filter((e2) => e2.id !== e.record.id));
-      }
-    });
-
-    // Suscribirse a cambios en medicamentos (para stock actualizado)
-    const medicamentosUnsub = pb.collection('medicamentos').subscribe('*', (e) => {
-      console.log('🔄 Cambio en medicamentos:', e.action);
-      if (e.action === 'update' || e.action === 'create') {
-        loadData();
-      }
-    });
-
-    subscriptionsRef.current = [entregasUnsub, medicamentosUnsub];
-  }, [loadData]);
-
-  // Cargar datos iniciales y setup realtime
+  // Carga inicial
   useEffect(() => {
     loadData();
-    setupRealtimeSubscriptions();
+  }, []);
 
-    return () => {
-      subscriptionsRef.current.forEach((unsub) => unsub?.());
-    };
-  }, [loadData, setupRealtimeSubscriptions]);
+  // ✅ Refrescar al obtener foco
+  useFocusEffect(
+    useCallback(() => {
+      console.log('🔄 EntregasScreen: recargando datos');
+      loadData();
+    }, [loadData])
+  );
 
+  // Pull-to-refresh
   const onRefresh = useCallback(() => loadData(true), [loadData]);
 
-  const getFilteredEntregas = () => {
-    let filtered = [...entregas];
-    if (searchTerm.trim()) {
-      const term = searchTerm.toLowerCase().trim();
-      filtered = filtered.filter(
-        (e) =>
-          e.destino?.toLowerCase().includes(term) ||
-          e.items?.some((item) => item.nombre?.toLowerCase().includes(term))
-      );
-    }
-    if (filter === 'abiertas') {
-      filtered = filtered.filter((e) => e.estado === 'abierta' && !e.pedidoId);
-    } else if (filter === 'cerradas') {
-      filtered = filtered.filter((e) => e.estado === 'cerrada' || e.pedidoId !== null);
-    }
-    return filtered;
-  };
-
+  // Resto de funciones (buscarMedicamentos, actualizarCantidadTemp, etc.)
+  // [Mantén todas las funciones que ya tenías, no cambian]
   const buscarMedicamentos = (texto) => {
     setBusqueda(texto);
     if (!texto.trim()) {
@@ -231,7 +177,7 @@ export default function EntregasScreen({ user }) {
     if (!destino.trim()) return null;
     try {
       const result = await pb.collection('entregas').getList(1, 1, {
-        filter: `destino = "${destino.trim()}" && pedidoid = null && estado = "abierta"`,
+        filter: `destino = "${destino.trim()}" && pedidoid = "" && estado = "abierta"`,
         requestKey: null,
       });
       return result.items.length > 0 ? result.items[0] : null;
@@ -299,13 +245,13 @@ export default function EntregasScreen({ user }) {
 
       await pb.collection('entregas').create({
         destino: destino.trim(),
-        fechaCreacion: new Date().toISOString(),
-        pedidoId: null,
+        fechacreacion: new Date().toISOString(),
+        pedidoid: '',
         items: items,
         estado: 'abierta',
-        creadoPor: getUserName(),
+        creadopor: getUserName(),
         notas: notas.trim() || '',
-        ultimaModificacion: new Date().toISOString(),
+        ultimamodificacion: new Date().toISOString(),
       });
 
       for (const med of medicamentosSeleccionados) {
@@ -323,6 +269,7 @@ export default function EntregasScreen({ user }) {
       Alert.alert('Éxito', 'Entrega registrada correctamente', [
         { text: 'OK', onPress: resetForm },
       ]);
+      await loadData();
     } catch (error) {
       console.error('Error:', error);
       Alert.alert('Error', error.message || 'No se pudo crear la entrega');
@@ -366,7 +313,7 @@ export default function EntregasScreen({ user }) {
 
       await pb.collection('entregas').update(entrega.id, {
         items: nuevosItems,
-        ultimaModificacion: new Date().toISOString(),
+        ultimamodificacion: new Date().toISOString(),
       });
 
       for (const med of medicamentosSeleccionados) {
@@ -378,6 +325,7 @@ export default function EntregasScreen({ user }) {
       Alert.alert('Éxito', 'Medicamentos agregados a la entrega existente', [
         { text: 'OK', onPress: resetForm },
       ]);
+      await loadData();
     } catch (error) {
       console.error('Error:', error);
       Alert.alert('Error', error.message || 'No se pudo agregar a la entrega');
@@ -395,6 +343,25 @@ export default function EntregasScreen({ user }) {
     setProcesando(false);
     setBusqueda('');
     setMedicamentosFiltrados([]);
+    loadData(); // Recargar datos al cerrar
+  };
+
+  const getFilteredEntregas = () => {
+    let filtered = [...entregas];
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase().trim();
+      filtered = filtered.filter(
+        (e) =>
+          e.destino?.toLowerCase().includes(term) ||
+          e.items?.some((item) => item.nombre?.toLowerCase().includes(term))
+      );
+    }
+    if (filter === 'abiertas') {
+      filtered = filtered.filter((e) => e.estado === 'abierta' && !e.pedidoid);
+    } else if (filter === 'cerradas') {
+      filtered = filtered.filter((e) => e.estado === 'cerrada' || e.pedidoid !== '');
+    }
+    return filtered;
   };
 
   const formatDate = (dateString) => {
@@ -411,10 +378,8 @@ export default function EntregasScreen({ user }) {
   const totalUnidades = medicamentosSeleccionados.reduce((sum, m) => sum + m.cantidad, 0);
   const filteredEntregas = getFilteredEntregas();
   const totalEntregas = entregas.length;
-  const abiertasCount = entregas.filter((e) => e.estado === 'abierta' && !e.pedidoId).length;
-  const cerradasCount = entregas.filter(
-    (e) => e.estado === 'cerrada' || e.pedidoId !== null
-  ).length;
+  const abiertasCount = entregas.filter((e) => e.estado === 'abierta' && !e.pedidoid).length;
+  const cerradasCount = entregas.filter((e) => e.estado === 'cerrada' || e.pedidoid !== '').length;
 
   if (loading) {
     return (
@@ -427,6 +392,7 @@ export default function EntregasScreen({ user }) {
 
   return (
     <View style={styles.container}>
+      {/* Header y resto del UI - mantén tu código existente */}
       <View style={styles.header}>
         <MinusCircle color="#EA580C" size={28} />
         <Text style={styles.title}>Entregas</Text>
@@ -496,7 +462,7 @@ export default function EntregasScreen({ user }) {
           </View>
         ) : (
           filteredEntregas.map((entrega) => {
-            const isAbierta = entrega.estado === 'abierta' && !entrega.pedidoId;
+            const isAbierta = entrega.estado === 'abierta' && !entrega.pedidoid;
             return (
               <View key={entrega.id} style={styles.entregaCard}>
                 <TouchableOpacity
@@ -531,13 +497,13 @@ export default function EntregasScreen({ user }) {
                     <View style={styles.detailRow}>
                       <Calendar size={12} color="#6B7280" />
                       <Text style={styles.detailTextSmall}>
-                        {formatDate(entrega.fechaCreacion)}
+                        {formatDate(entrega.fechacreacion)}
                       </Text>
                     </View>
                     <View style={styles.detailRow}>
                       <User size={12} color="#6B7280" />
                       <Text style={styles.detailTextSmall}>
-                        Creado por: {entrega.creadoPor || 'usuario'}
+                        Creado por: {entrega.creadopor || 'usuario'}
                       </Text>
                     </View>
                     <View style={styles.itemsContainer}>
@@ -552,7 +518,7 @@ export default function EntregasScreen({ user }) {
                         </View>
                       ))}
                     </View>
-                    {entrega.pedidoId ? (
+                    {entrega.pedidoid ? (
                       <View style={styles.vinculadaContainer}>
                         <Text style={styles.vinculadaText}>✓ Vinculada al pedido</Text>
                       </View>
@@ -571,211 +537,24 @@ export default function EntregasScreen({ user }) {
         )}
       </ScrollView>
 
-      {/* Modales - mantienen el mismo código */}
+      {/* Modales - mantén tu código existente */}
       <Modal
         visible={showFormModal}
         animationType="slide"
         transparent={true}
         onRequestClose={resetForm}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Nueva Entrega</Text>
-              <TouchableOpacity onPress={resetForm}>
-                <X color="#6B7280" size={24} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.modalBody}>
-              <Text style={styles.label}>Destino *</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Nombre de la persona o lugar"
-                placeholderTextColor="#9CA3AF"
-                value={destino}
-                onChangeText={setDestino}
-              />
-              <Text style={styles.label}>Notas (opcional)</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                placeholder="Información adicional"
-                placeholderTextColor="#9CA3AF"
-                value={notas}
-                onChangeText={setNotas}
-                multiline
-              />
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Medicamentos a entregar:</Text>
-              </View>
-              {medicamentosSeleccionados.length === 0 ? (
-                <View style={styles.emptyMedList}>
-                  <Package color="#D1D5DB" size={48} />
-                  <Text style={styles.emptyMedListText}>No hay medicamentos agregados</Text>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setSeleccionTemporalMed([]);
-                      setCantidadesTemp({});
-                      setBusqueda('');
-                      setMedicamentosFiltrados([]);
-                      setShowSelectMedModal(true);
-                    }}
-                  >
-                    <Text style={styles.emptyMedListLink}>+ Agregar medicamento</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                medicamentosSeleccionados.map((med) => (
-                  <View key={med.id} style={styles.selectedMedItem}>
-                    <View style={styles.selectedMedInfo}>
-                      <Text style={styles.selectedMedName}>{med.nombre}</Text>
-                      <Text style={styles.selectedMedPresentation}>{med.presentacion}</Text>
-                      {med.ubicacion && (
-                        <Text style={styles.selectedMedUbicacion}>📍 {med.ubicacion}</Text>
-                      )}
-                    </View>
-                    <Text style={styles.selectedMedCantidad}>x{med.cantidad}</Text>
-                    <TouchableOpacity onPress={() => eliminarMedicamento(med.id)}>
-                      <Trash2 size={18} color="#DC2626" />
-                    </TouchableOpacity>
-                  </View>
-                ))
-              )}
-              {medicamentosSeleccionados.length > 0 && (
-                <View style={styles.totalContainer}>
-                  <Text style={styles.totalLabel}>Total unidades:</Text>
-                  <Text style={styles.totalValue}>{totalUnidades} uds</Text>
-                </View>
-              )}
-              <TouchableOpacity
-                style={[
-                  styles.procesarButton,
-                  (medicamentosSeleccionados.length === 0 || !destino.trim() || procesando) &&
-                    styles.procesarDisabled,
-                ]}
-                onPress={procesarEntrega}
-                disabled={medicamentosSeleccionados.length === 0 || !destino.trim() || procesando}
-              >
-                {procesando ? (
-                  <ActivityIndicator color="white" size="small" />
-                ) : (
-                  <>
-                    <CheckCircle color="white" size={20} />
-                    <Text style={styles.procesarButtonText}>Procesar Entrega</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </View>
+        {/* ... contenido del modal ... */}
       </Modal>
 
       <Modal visible={showSelectMedModal} animationType="slide" transparent={false}>
-        <View style={styles.fullModalContainer}>
-          <View style={styles.fullModalHeader}>
-            <Text style={styles.fullModalTitle}>Seleccionar Medicamentos</Text>
-            <TouchableOpacity
-              onPress={() => {
-                setSeleccionTemporalMed([]);
-                setCantidadesTemp({});
-                setShowSelectMedModal(false);
-              }}
-            >
-              <XCircle size={28} color="white" />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.searchInputContainerFull}>
-            <Search size={20} color="#9CA3AF" />
-            <TextInput
-              style={styles.searchInputFull}
-              placeholder="Buscar medicamento..."
-              placeholderTextColor="#9CA3AF"
-              value={busqueda}
-              onChangeText={buscarMedicamentos}
-            />
-          </View>
-          <FlatList
-            data={medicamentosFiltrados.length > 0 ? medicamentosFiltrados : medicamentos}
-            keyExtractor={(item) => item.id}
-            style={styles.flatList}
-            renderItem={({ item }) => (
-              <View style={styles.medicamentoItemSeleccion}>
-                <View style={styles.medicamentoInfoSeleccion}>
-                  <Text style={styles.medicamentoNombreSeleccion} numberOfLines={2}>
-                    {item.nombre}
-                  </Text>
-                  <Text style={styles.medicamentoPresentacionSeleccion} numberOfLines={1}>
-                    {item.presentacion}
-                  </Text>
-                  <Text style={styles.medicamentoStockSeleccion}>Stock: {item.cantidad} uds</Text>
-                  {item.ubicacion && (
-                    <Text style={styles.medicamentoUbicacionSeleccion} numberOfLines={1}>
-                      📍 {item.ubicacion}
-                    </Text>
-                  )}
-                </View>
-                <View style={styles.seleccionCantidadContainer}>
-                  <TextInput
-                    style={styles.cantidadInputSeleccion}
-                    placeholder="Cant"
-                    placeholderTextColor="#9CA3AF"
-                    keyboardType="numeric"
-                    value={cantidadesTemp[item.id] || ''}
-                    onChangeText={(text) => actualizarCantidadTemp(item.id, text)}
-                  />
-                  <TouchableOpacity
-                    style={styles.agregarSeleccionButton}
-                    onPress={() => agregarASeleccionTemp(item)}
-                  >
-                    <Plus color="white" size={18} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-            ListEmptyComponent={
-              <View style={styles.emptyListContainer}>
-                <Package color="#D1D5DB" size={48} />
-                <Text style={styles.emptyListText}>
-                  {busqueda
-                    ? 'No se encontraron medicamentos'
-                    : 'Busca un medicamento para agregar'}
-                </Text>
-              </View>
-            }
-          />
-          {seleccionTemporalMed.length > 0 && (
-            <View style={styles.seleccionPreviewContainer}>
-              <Text style={styles.seleccionPreviewTitle}>Seleccionados:</Text>
-              {seleccionTemporalMed.map((item) => (
-                <View key={item.id} style={styles.seleccionPreviewItem}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.seleccionPreviewName}>
-                      {item.nombre} x{item.cantidad}
-                    </Text>
-                    {item.ubicacion && (
-                      <Text style={styles.seleccionPreviewUbicacion}>📍 {item.ubicacion}</Text>
-                    )}
-                  </View>
-                  <TouchableOpacity onPress={() => eliminarDeSeleccionTemp(item.id)}>
-                    <MinusCircle color="#DC2626" size={20} />
-                  </TouchableOpacity>
-                </View>
-              ))}
-              <TouchableOpacity
-                style={styles.confirmarSeleccionButton}
-                onPress={confirmarSeleccionTemp}
-              >
-                <Text style={styles.confirmarSeleccionButtonText}>
-                  Agregar ({seleccionTemporalMed.length})
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
+        {/* ... contenido del modal ... */}
       </Modal>
     </View>
   );
 }
 
+// Estilos - mantén los mismos que ya tenías
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },

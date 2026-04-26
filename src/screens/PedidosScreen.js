@@ -276,17 +276,17 @@ export default function PedidosScreen({ user }) {
     });
 
     const pedidoData = {
-      nombreSolicitante: formData.nombreSolicitante.trim(),
-      lugarResidencia: formData.lugarResidencia.trim() || '',
-      telefonoContacto: formData.telefonoContacto.trim() || '',
+      nombresolicitante: formData.nombreSolicitante.trim(),
+      lugarresidencia: formData.lugarResidencia.trim() || '',
+      telefonocontacto: formData.telefonoContacto.trim() || '',
       notas: formData.notas.trim() || '',
-      medicamentosSolicitados: medicamentosLimpios,
+      medicamentossolicitados: medicamentosLimpios,
       atendido: false,
-      entregasRealizadas: [],
-      fechaPedido: new Date().toISOString(),
-      fechaAtencion: null,
-      creadoPor: getUserName(),
-      atendidoPor: '',
+      entregasrealizadas: [],
+      fechapedido: new Date().toISOString(),
+      fechaatencion: null,
+      creadopor: getUserName(),
+      atendidopor: '',
     };
 
     try {
@@ -354,9 +354,9 @@ export default function PedidosScreen({ user }) {
         if (!entrega) continue;
 
         await pb.collection('entregas').update(entregaId, {
-          pedidoId: selectedPedido.id,
-          vinculadaEn: new Date().toISOString(),
-          vinculadaPor: getUserName(),
+          pedidoid: selectedPedido.id,
+          vinculadaen: new Date().toISOString(),
+          vinculadapor: getUserName(),
           estado: 'cerrada',
         });
 
@@ -371,10 +371,10 @@ export default function PedidosScreen({ user }) {
 
       const entregasActuales = selectedPedido.entregasRealizadas || [];
       await pb.collection('pedidos').update(selectedPedido.id, {
-        entregasRealizadas: [...entregasActuales, ...nuevasEntregas],
+        entregasrealizadas: [...entregasActuales, ...nuevasEntregas],
         atendido: true,
-        fechaAtencion: new Date().toISOString(),
-        atendidoPor: getUserName(),
+        fechaatencion: new Date().toISOString(),
+        atendidopor: getUserName(),
       });
 
       setShowAtenderModal(false);
@@ -551,14 +551,14 @@ export default function PedidosScreen({ user }) {
                     ]}
                   />
                   <View>
-                    <Text style={styles.pedidoNombre}>{pedido.nombreSolicitante}</Text>
+                    <Text style={styles.pedidoNombre}>{pedido.nombresolicitante}</Text>
                     {pedido.notas ? (
                       <Text style={styles.pedidoNotas} numberOfLines={1}>
                         📝 {pedido.notas}
                       </Text>
                     ) : null}
                     <Text style={styles.pedidoMedicamentos}>
-                      {pedido.medicamentosSolicitados?.length || 0} solicitados |{' '}
+                      {pedido.medicamentossolicitados?.length || 0} solicitados |{' '}
                       {getTotalEntregadosCount(pedido)} entregados
                     </Text>
                   </View>
@@ -566,7 +566,7 @@ export default function PedidosScreen({ user }) {
                 <View style={styles.pedidoHeaderRight}>
                   {!pedido.atendido && (
                     <TouchableOpacity
-                      onPress={() => eliminarPedido(pedido.id, pedido.nombreSolicitante)}
+                      onPress={() => eliminarPedido(pedido.id, pedido.nombresolicitante)}
                     >
                       <Trash2 color="#DC2626" size={20} />
                     </TouchableOpacity>
@@ -579,18 +579,18 @@ export default function PedidosScreen({ user }) {
                 <View style={styles.pedidoDetails}>
                   <View style={styles.detailRow}>
                     <Calendar size={16} color="#6B7280" />
-                    <Text style={styles.detailText}>{formatDate(pedido.fechaPedido)}</Text>
+                    <Text style={styles.detailText}>{formatDate(pedido.fechapedido)}</Text>
                   </View>
-                  {pedido.lugarResidencia && (
+                  {pedido.lugarresidencia && (
                     <View style={styles.detailRow}>
                       <MapPin size={16} color="#6B7280" />
-                      <Text style={styles.detailText}>{pedido.lugarResidencia}</Text>
+                      <Text style={styles.detailText}>{pedido.lugarresidencia}</Text>
                     </View>
                   )}
                   {pedido.telefonoContacto && (
                     <View style={styles.detailRow}>
                       <Phone size={16} color="#6B7280" />
-                      <Text style={styles.detailText}>{pedido.telefonoContacto}</Text>
+                      <Text style={styles.detailText}>{pedido.telefonocontacto}</Text>
                     </View>
                   )}
 
@@ -598,7 +598,7 @@ export default function PedidosScreen({ user }) {
                     <Text style={styles.medicamentosEntregadosTitle}>
                       Medicamentos solicitados:
                     </Text>
-                    {pedido.medicamentosSolicitados?.map((med, idx) => {
+                    {pedido.medicamentossolicitados?.map((med, idx) => {
                       const status = getMedicamentoEnPedidoStatus(med);
                       return (
                         <View key={idx} style={styles.medicamentoEntregadoItem}>
@@ -612,19 +612,19 @@ export default function PedidosScreen({ user }) {
                     })}
                   </View>
 
-                  {pedido.entregasRealizadas && pedido.entregasRealizadas.length > 0 && (
+                  {pedido.entregasrealizadas && pedido.entregasrealizadas.length > 0 && (
                     <View style={styles.medicamentosEntregadosContainer}>
                       <Text style={styles.medicamentosEntregadosTitle}>
                         Medicamentos entregados:
                       </Text>
-                      {pedido.entregasRealizadas.map((entrega, idx) => (
+                      {pedido.entregasrealizadas.map((entrega, idx) => (
                         <View key={idx} style={styles.entregaRealizadaItem}>
                           <Text style={styles.entregaFecha}>📅 {formatDate(entrega.fecha)}</Text>
                           <Text style={styles.entregaDestino}>
-                            📍 Destino: {entrega.destino || pedido.nombreSolicitante}
+                            📍 Destino: {entrega.destino || pedido.nombresolicitante}
                           </Text>
                           <Text style={styles.entregaUsuario}>
-                            👤 Entregado por: {entrega.realizadoPor || 'usuario'}
+                            👤 Entregado por: {entrega.realizadopor || 'usuario'}
                           </Text>
                           {entrega.items?.map((item, itemIdx) => (
                             <View key={itemIdx} style={styles.medicamentoEntregadoItem}>
@@ -935,7 +935,7 @@ export default function PedidosScreen({ user }) {
                             <Square size={22} color="#9CA3AF" />
                           )}
                           <Text style={styles.entregaOptionFecha}>
-                            📅 {formatDate(entrega.fechaCreacion)}
+                            📅 {formatDate(entrega.fechacreacion)}
                           </Text>
                         </View>
                         <View style={styles.entregaOptionDestinoContainer}>
@@ -943,7 +943,7 @@ export default function PedidosScreen({ user }) {
                           <Text style={styles.entregaOptionDestinoValue}>{entrega.destino}</Text>
                         </View>
                         <Text style={styles.entregaOptionCreadoPor}>
-                          👤 Creado por: {entrega.creadoPor || 'usuario'}
+                          👤 Creado por: {entrega.creadopor || 'usuario'}
                         </Text>
                         <View style={styles.entregaOptionItemsHeader}>
                           <Text style={styles.entregaOptionItemsTitle}>Medicamentos:</Text>
