@@ -1,4 +1,4 @@
-// src/screens/HistoryScreen.js
+// src/screens/HistoryScreen.js - NUEVA VERSIÓN
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
@@ -9,6 +9,7 @@ import {
   RefreshControl,
   TouchableOpacity,
   Modal,
+  Alert,
   TextInput,
   Platform,
 } from 'react-native';
@@ -17,188 +18,162 @@ import {
   Package,
   Calendar,
   User,
-  ChevronDown,
-  ChevronUp,
-  Pill,
+  Search,
   Filter,
   X,
   Check,
-  MapPin,
-  Phone,
-  Tag,
+  FileText,
+  Clock,
 } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 import { pb } from '../services/PocketBaseConfig';
 import { useFocusEffect } from '@react-navigation/native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
-// ── Utilidades ───────────────────────────────────────────────
-const normalizeText = (text) => {
+const escapeHtml = (text) => {
   if (!text) return '';
   return text
-    .toLowerCase()
-    .trim()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-};
-
-const formatDisplayDate = (dateString) => {
-  if (!dateString) return '';
-  const [year, month, day] = dateString.split('-');
-  return `${day}/${month}/${year}`;
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 };
 
 export default function HistoryScreen() {
-  const [entregas, setEntregas] = useState([]);
-  const [pedidos, setPedidos] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [filteredHistory, setFilteredHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [expandedIds, setExpandedIds] = useState([]);
-  const [filter, setFilter] = useState('todas'); // 'todas', 'vinculadas', 'huerfanas'
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterMovimiento, setFilterMovimiento] = useState('todos'); // todos, Añadiendo, Entregando, Desactivando, Reactivando
+  const [generatingPDF, setGeneratingPDF] = useState(false);
 
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [filters, setFilters] = useState({
-    destino: '',
-    medicamento: '',
     fechaDesde: '',
     fechaHasta: '',
+    movimiento: '',
   });
   const [tempFilters, setTempFilters] = useState({
-    destino: '',
-    medicamento: '',
     fechaDesde: '',
     fechaHasta: '',
+    movimiento: '',
   });
   const [showDatePicker, setShowDatePicker] = useState(null);
   const [activeFiltersCount, setActiveFiltersCount] = useState(0);
 
-  // Ref para evitar cargas simultáneas
   const isLoadingRef = useRef(false);
 
-  // ── Formatear fechas para mostrar ──────────────────────────
   const formatDate = (dateString) => {
-    if (!dateString) return 'Fecha desconocida';
+    if (!dateString) return '';
     const date = new Date(dateString);
     return date.toLocaleDateString('es-ES', {
       day: '2-digit',
       month: '2-digit',
-      year: 'numeric',
+      year: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
     });
   };
 
-  // ── Obtener información del pedido (con nombres en minúsculas) ──
-  const getPedidoInfo = (pedidoId) => {
-    if (!pedidoId) return null;
-    const pedido = pedidos.find((p) => p.id === pedidoId);
-    if (!pedido) return null;
-    return {
-      id: pedido.id,
-      nombresolicitante: pedido.nombresolicitante || 'Desconocido',
-      lugaresidencia: pedido.lugaresidencia || '',
-      telefonocontacto: pedido.telefonocontacto || '',
-    };
+  const formatDateShort = (dateString) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('es-ES', {
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+    });
   };
 
-  // ── Cargar datos desde PocketBase ──────────────────────────
-  const loadData = useCallback(async (isRefresh = false) => {
-    if (isLoadingRef.current) return;
-    isLoadingRef.current = true;
+  const loadData = useCallback(
+    async (isRefresh = false) => {
+      if (isLoadingRef.current) return;
+      isLoadingRef.current = true;
 
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
 
-    try {
-      const [entregasResult, pedidosResult] = await Promise.all([
-        pb.collection('entregas').getList(1, 200, { sort: '-fechacreacion', requestKey: null }),
-        pb.collection('pedidos').getList(1, 200, { sort: '-fechapedido', requestKey: null }),
-      ]);
-
-      // Calcular total de unidades por entrega
-      const entregasWithTotal = entregasResult.items.map((item) => ({
-        ...item,
-        totalUnidades: (item.items || []).reduce((sum, i) => sum + (i.cantidad || 1), 0),
-      }));
-
-      setEntregas(entregasWithTotal);
-      setPedidos(pedidosResult.items);
-    } catch (error) {
-      if (!error.isAbort) {
-        console.error('Error cargando datos:', error);
-        Alert.alert('Error', 'No se pudieron cargar los datos');
+      try {
+        const result = await pb.collection('history').getList(1, 500, {
+          sort: '-fecha',
+          requestKey: null,
+        });
+        setHistory(result.items);
+        applyFilters(result.items, filters, searchTerm, filterMovimiento);
+      } catch (error) {
+        if (!error.isAbort) {
+          console.error('Error cargando history:', error);
+          Alert.alert('Error', 'No se pudieron cargar los datos');
+        }
+      } finally {
+        isLoadingRef.current = false;
+        setLoading(false);
+        setRefreshing(false);
       }
-    } finally {
-      isLoadingRef.current = false;
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  // Refrescar cada vez que la pantalla recibe foco
-  useFocusEffect(
-    useCallback(() => {
-      console.log('🔄 Historial: recargando datos');
-      loadData();
-    }, [loadData])
+    },
+    [filters, searchTerm, filterMovimiento]
   );
 
-  // ── Carga inicial y refrescar al foco (sin realtime) ──────
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  const applyFilters = (data, currentFilters, search, movimientoFilter) => {
+    let filtered = [...data];
 
-  // Pull-to-refresh
-  const onRefresh = useCallback(() => loadData(true), [loadData]);
-
-  // ── Filtros ──────────────────────────────────────────────
-  const getFilteredEntregas = () => {
-    let filtered = [...entregas];
-
-    // Filtro por tipo (todas, vinculadas, huerfanas)
-    if (filter === 'vinculadas') {
-      filtered = filtered.filter((e) => e.pedidoid && e.pedidoid !== '');
-    } else if (filter === 'huerfanas') {
-      filtered = filtered.filter((e) => !e.pedidoid || e.pedidoid === '');
+    // Filtro por tipo de movimiento
+    if (movimientoFilter !== 'todos') {
+      filtered = filtered.filter((h) => h.movimiento === movimientoFilter);
     }
 
-    // Filtro por destino
-    if (filters.destino.trim()) {
-      const searchNorm = normalizeText(filters.destino);
-      filtered = filtered.filter((e) => normalizeText(e.destino || '').includes(searchNorm));
-    }
-
-    // Filtro por medicamento
-    if (filters.medicamento.trim()) {
-      const searchNorm = normalizeText(filters.medicamento);
-      filtered = filtered.filter((e) =>
-        e.items?.some((item) => normalizeText(item.nombre).includes(searchNorm))
+    // Filtro por término de búsqueda (id_med o user)
+    if (search.trim()) {
+      const term = search.toLowerCase().trim();
+      filtered = filtered.filter(
+        (h) =>
+          (h.id_med && h.id_med.toLowerCase().includes(term)) ||
+          (h.user && h.user.toLowerCase().includes(term))
       );
     }
 
     // Filtro por fecha desde
-    if (filters.fechaDesde) {
-      const desde = new Date(filters.fechaDesde);
+    if (currentFilters.fechaDesde) {
+      const desde = new Date(currentFilters.fechaDesde);
       desde.setHours(0, 0, 0, 0);
-      filtered = filtered.filter((e) => new Date(e.fechacreacion) >= desde);
+      filtered = filtered.filter((h) => new Date(h.fecha) >= desde);
     }
 
     // Filtro por fecha hasta
-    if (filters.fechaHasta) {
-      const hasta = new Date(filters.fechaHasta);
+    if (currentFilters.fechaHasta) {
+      const hasta = new Date(currentFilters.fechaHasta);
       hasta.setHours(23, 59, 59, 999);
-      filtered = filtered.filter((e) => new Date(e.fechacreacion) <= hasta);
+      filtered = filtered.filter((h) => new Date(h.fecha) <= hasta);
     }
 
-    return filtered;
+    setFilteredHistory(filtered);
   };
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  useEffect(() => {
+    applyFilters(history, filters, searchTerm, filterMovimiento);
+  }, [searchTerm, filterMovimiento, filters]);
+
+  const onRefresh = useCallback(() => loadData(true), [loadData]);
 
   const updateActiveFiltersCount = (filtros) => {
     let count = 0;
-    if (filtros.destino.trim()) count++;
-    if (filtros.medicamento.trim()) count++;
     if (filtros.fechaDesde) count++;
     if (filtros.fechaHasta) count++;
+    if (filtros.movimiento && filtros.movimiento !== 'todos') count++;
     setActiveFiltersCount(count);
   };
 
@@ -207,16 +182,17 @@ export default function HistoryScreen() {
     setShowFilterModal(true);
   };
 
-  const applyFilters = () => {
+  const applyFiltersModal = () => {
     setFilters({ ...tempFilters });
     updateActiveFiltersCount(tempFilters);
     setShowFilterModal(false);
   };
 
   const clearFilters = () => {
-    const emptyFilters = { destino: '', medicamento: '', fechaDesde: '', fechaHasta: '' };
+    const emptyFilters = { fechaDesde: '', fechaHasta: '', movimiento: '' };
     setFilters(emptyFilters);
     setTempFilters(emptyFilters);
+    setFilterMovimiento('todos');
     updateActiveFiltersCount(emptyFilters);
     setShowFilterModal(false);
   };
@@ -233,17 +209,67 @@ export default function HistoryScreen() {
     }
   };
 
-  const toggleExpand = (id) => {
-    setExpandedIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
+  const generatePDF = async () => {
+    if (filteredHistory.length === 0) {
+      Alert.alert('Sin datos', 'No hay datos para generar el PDF');
+      return;
+    }
 
-  // ── Estadísticas ───────────────────────────────────────────
-  const totalEntregas = entregas.length;
-  const vinculadasCount = entregas.filter((e) => e.pedidoid && e.pedidoid !== '').length;
-  const huerfanasCount = entregas.filter((e) => !e.pedidoid || e.pedidoid === '').length;
-  const filteredEntregas = getFilteredEntregas();
+    setGeneratingPDF(true);
+    try {
+      const today = new Date().toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      let tableRows = '';
+      filteredHistory.forEach((item, index) => {
+        tableRows += `
+          <tr style="background-color: ${index % 2 === 0 ? '#f9fafb' : 'white'}">
+            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${index + 1}</td>
+            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(formatDateShort(item.fecha))}</td>
+            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.id_med || '')}</td>
+            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.movimiento || '')}</td>
+            <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${escapeHtml(String(item.cantidad || ''))}</td>
+            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.user || '')}</td>
+          </tr>`;
+      });
+
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Historial de Movimientos</title>
+        <style>
+          *{margin:0;padding:0;box-sizing:border-box}
+          body{font-family:'Helvetica','Arial',sans-serif;padding:20px;background:white}
+          .header{text-align:center;margin-bottom:20px;padding-bottom:15px;border-bottom:2px solid #7C3AED}
+          .title{font-size:20px;font-weight:bold;color:#1F2937;margin-bottom:5px}
+          .subtitle{font-size:12px;color:#6B7280}
+          .stats{margin-bottom:15px;padding:10px;background:#F3F4F6;border-radius:8px;text-align:center}
+          table{width:100%;border-collapse:collapse;font-size:11px}
+          th{background:#7C3AED;color:white;padding:8px;text-align:left;font-weight:bold}
+          .footer{margin-top:20px;padding-top:10px;text-align:center;font-size:10px;color:#9CA3AF;border-top:1px solid #E5E7EB}
+        </style></head><body>
+        <div class="header"><div class="title">HISTORIAL DE MOVIMIENTOS</div><div class="subtitle">Generado: ${today}</div></div>
+        <div class="stats"><div class="stats-text">Total de registros: ${filteredHistory.length}</div></div>
+        <table><thead><tr><th>#</th><th>Fecha</th><th>ID Medicamento</th><th>Movimiento</th><th>Cantidad</th><th>Usuario/Destino</th></tr></thead>
+        <tbody>${tableRows}</tbody></table>
+        <div class="footer"><div>FarmaRincón - Sistema de Gestión de Inventario</div></div>
+        </body></html>`;
+      const { uri } = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Compartir historial',
+        });
+      }
+    } catch (error) {
+      console.error('Error generando PDF:', error);
+      Alert.alert('Error', 'No se pudo generar el PDF');
+    } finally {
+      setGeneratingPDF(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -254,15 +280,41 @@ export default function HistoryScreen() {
     );
   }
 
+  const getMovimientoColor = (movimiento) => {
+    switch (movimiento) {
+      case 'Añadiendo':
+        return '#10B981';
+      case 'Entregando':
+        return '#EA580C';
+      case 'Desactivando':
+        return '#DC2626';
+      case 'Reactivando':
+        return '#3B82F6';
+      default:
+        return '#6B7280';
+    }
+  };
+
+  const getMovimientoIcon = (movimiento) => {
+    switch (movimiento) {
+      case 'Añadiendo':
+        return '➕';
+      case 'Entregando':
+        return '📦';
+      case 'Desactivando':
+        return '❌';
+      case 'Reactivando':
+        return '🔄';
+      default:
+        return '📋';
+    }
+  };
+
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      {/* Header */}
+    <View style={styles.container}>
       <View style={styles.header}>
         <History color="#7C3AED" size={28} />
-        <Text style={styles.title}>Historial de Entregas</Text>
+        <Text style={styles.title}>Historial de Movimientos</Text>
         <TouchableOpacity style={styles.filterButton} onPress={openFilterModal}>
           <Filter color="#6B7280" size={22} />
           {activeFiltersCount > 0 && (
@@ -273,230 +325,140 @@ export default function HistoryScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Filtros rápidos */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersContainer}>
-        <TouchableOpacity
-          style={[styles.filterChip, filter === 'todas' && styles.filterChipActive]}
-          onPress={() => setFilter('todas')}
-        >
-          <Text style={[styles.filterChipText, filter === 'todas' && styles.filterChipTextActive]}>
-            Todas ({totalEntregas})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterChip, filter === 'vinculadas' && styles.filterChipActive]}
-          onPress={() => setFilter('vinculadas')}
-        >
-          <Text
-            style={[styles.filterChipText, filter === 'vinculadas' && styles.filterChipTextActive]}
-          >
-            Vinculadas ({vinculadasCount})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterChip, filter === 'huerfanas' && styles.filterChipActive]}
-          onPress={() => setFilter('huerfanas')}
-        >
-          <Text
-            style={[styles.filterChipText, filter === 'huerfanas' && styles.filterChipTextActive]}
-          >
-            Entregas directas ({huerfanasCount})
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
-
-      {/* Contador de resultados */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{filteredEntregas.length}</Text>
-          <Text style={styles.statLabel}>
-            {activeFiltersCount > 0 ? 'Resultados' : 'Total entregas'}
-          </Text>
-        </View>
-        {activeFiltersCount > 0 && (
-          <TouchableOpacity style={styles.clearFiltersButton} onPress={clearFilters}>
-            <X color="#6B7280" size={14} />
-            <Text style={styles.clearFiltersText}>Limpiar filtros</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Lista de entregas */}
-      {filteredEntregas.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Package color="#D1D5DB" size={64} />
-          <Text style={styles.emptyTitle}>No hay entregas</Text>
-          <Text style={styles.emptyText}>
-            {activeFiltersCount > 0
-              ? 'No hay resultados con los filtros aplicados'
-              : filter === 'vinculadas'
-                ? 'No hay entregas vinculadas a pedidos'
-                : filter === 'huerfanas'
-                  ? 'No hay entregas directas'
-                  : 'Las entregas que realices aparecerán aquí'}
-          </Text>
-          {activeFiltersCount > 0 && (
-            <TouchableOpacity style={styles.clearAllButton} onPress={clearFilters}>
-              <Text style={styles.clearAllButtonText}>Limpiar todos los filtros</Text>
+      {/* Barra de búsqueda y filtros rápidos */}
+      <View style={styles.searchSection}>
+        <View style={styles.searchContainer}>
+          <Search color="#9CA3AF" size={20} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Buscar por ID de medicamento o usuario..."
+            placeholderTextColor="#9CA3AF"
+            value={searchTerm}
+            onChangeText={setSearchTerm}
+          />
+          {searchTerm !== '' && (
+            <TouchableOpacity onPress={() => setSearchTerm('')}>
+              <X color="#9CA3AF" size={20} />
             </TouchableOpacity>
           )}
         </View>
-      ) : (
-        filteredEntregas.map((entrega) => {
-          const isExpanded = expandedIds.includes(entrega.id);
-          const pedidoInfo = entrega.pedidoid ? getPedidoInfo(entrega.pedidoid) : null;
-          const isVinculada = !!(entrega.pedidoid && entrega.pedidoid !== '');
 
-          return (
-            <View key={entrega.id} style={styles.card}>
-              <TouchableOpacity style={styles.cardHeader} onPress={() => toggleExpand(entrega.id)}>
-                <View style={styles.cardHeaderLeft}>
-                  <Calendar color="#6B7280" size={16} />
-                  <Text style={styles.cardDate}>{formatDate(entrega.fechacreacion)}</Text>
-                </View>
-                <View style={styles.cardHeaderRight}>
-                  <View
-                    style={[
-                      styles.badge,
-                      isVinculada ? styles.badgeVinculado : styles.badgeHuerfano,
-                    ]}
-                  >
-                    <Text style={styles.badgeText}>
-                      {entrega.items?.length || 0} {entrega.items?.length === 1 ? 'item' : 'items'}
-                    </Text>
-                  </View>
-                  {isExpanded ? (
-                    <ChevronUp color="#6B7280" size={20} />
-                  ) : (
-                    <ChevronDown color="#6B7280" size={20} />
-                  )}
-                </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterChips}>
+          {['todos', 'Añadiendo', 'Entregando', 'Desactivando', 'Reactivando'].map((tipo) => (
+            <TouchableOpacity
+              key={tipo}
+              style={[styles.chip, filterMovimiento === tipo && styles.chipActive]}
+              onPress={() => setFilterMovimiento(tipo)}
+            >
+              <Text style={[styles.chipText, filterMovimiento === tipo && styles.chipTextActive]}>
+                {tipo === 'todos' ? 'Todos' : tipo}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      {/* Contador y botón PDF */}
+      <View style={styles.statsContainer}>
+        <View style={styles.statCard}>
+          <Text style={styles.statNumber}>{filteredHistory.length}</Text>
+          <Text style={styles.statLabel}>Registros encontrados</Text>
+        </View>
+        <TouchableOpacity style={styles.pdfButton} onPress={generatePDF} disabled={generatingPDF}>
+          <FileText color="#7C3AED" size={18} />
+          <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Lista de movimientos */}
+      <ScrollView
+        style={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {filteredHistory.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Package color="#D1D5DB" size={64} />
+            <Text style={styles.emptyTitle}>No hay movimientos</Text>
+            <Text style={styles.emptyText}>
+              {searchTerm || filterMovimiento !== 'todos' || activeFiltersCount > 0
+                ? 'No hay resultados con esos filtros'
+                : 'Los movimientos aparecerán aquí'}
+            </Text>
+            {(searchTerm || filterMovimiento !== 'todos' || activeFiltersCount > 0) && (
+              <TouchableOpacity style={styles.clearAllButton} onPress={clearFilters}>
+                <Text style={styles.clearAllButtonText}>Limpiar filtros</Text>
               </TouchableOpacity>
-
-              <View style={styles.cardBody}>
-                <View style={styles.destinoContainer}>
-                  <Package color="#7C3AED" size={16} />
-                  <Text style={styles.destinoLabel}>Destino:</Text>
-                  <Text style={styles.destinoText}>{entrega.destino}</Text>
+            )}
+          </View>
+        ) : (
+          filteredHistory.map((item) => (
+            <View key={item.id} style={styles.historyCard}>
+              <View style={styles.cardRow}>
+                <View style={styles.dateContainer}>
+                  <Clock color="#6B7280" size={14} />
+                  <Text style={styles.dateText}>{formatDateShort(item.fecha)}</Text>
                 </View>
-
-                <View style={styles.destinoContainer}>
-                  <User color="#6B7280" size={16} />
-                  <Text style={styles.destinoLabel}>Entregado por:</Text>
-                  <Text style={styles.destinoText}>{entrega.creadopor || 'usuario'}</Text>
-                </View>
-
-                {entrega.notas && (
-                  <View style={styles.destinoContainer}>
-                    <Text style={styles.notasText}>📝 {entrega.notas}</Text>
-                  </View>
-                )}
-
-                {isVinculada && pedidoInfo && (
-                  <View style={styles.pedidoInfoContainer}>
-                    <Text style={styles.pedidoInfoTitle}>Información del pedido:</Text>
-                    <View style={styles.pedidoInfoRow}>
-                      <Tag color="#6B7280" size={12} />
-                      <Text style={styles.pedidoInfoLabel}>Solicitante:</Text>
-                      <Text style={styles.pedidoInfoValue}>{pedidoInfo.nombresolicitante}</Text>
-                    </View>
-                    {pedidoInfo.lugaresidencia && (
-                      <View style={styles.pedidoInfoRow}>
-                        <MapPin color="#6B7280" size={12} />
-                        <Text style={styles.pedidoInfoLabel}>Residencia:</Text>
-                        <Text style={styles.pedidoInfoValue}>{pedidoInfo.lugaresidencia}</Text>
-                      </View>
-                    )}
-                    {pedidoInfo.telefonocontacto && (
-                      <View style={styles.pedidoInfoRow}>
-                        <Phone color="#6B7280" size={12} />
-                        <Text style={styles.pedidoInfoLabel}>Contacto:</Text>
-                        <Text style={styles.pedidoInfoValue}>{pedidoInfo.telefonocontacto}</Text>
-                      </View>
-                    )}
-                  </View>
-                )}
-
-                {!isExpanded && entrega.items && entrega.items.length > 0 && (
-                  <Text style={styles.itemsResume}>
-                    {entrega.items.length}{' '}
-                    {entrega.items.length === 1 ? 'medicamento' : 'medicamentos'}
-                  </Text>
-                )}
-
-                {isExpanded && entrega.items && entrega.items.length > 0 && (
-                  <View style={styles.itemsContainer}>
-                    <Text style={styles.itemsTitle}>Medicamentos entregados:</Text>
-                    {entrega.items.map((item, index) => (
-                      <View key={index} style={styles.itemRow}>
-                        <Pill color="#7C3AED" size={14} />
-                        <View style={styles.itemInfo}>
-                          <Text style={styles.itemName}>{item.nombre}</Text>
-                          {item.presentacion && (
-                            <Text style={styles.itemPresentation}>{item.presentacion}</Text>
-                          )}
-                          {item.ubicacion && (
-                            <Text style={styles.itemUbicacion}>📍 {item.ubicacion}</Text>
-                          )}
-                        </View>
-                        <Text style={styles.itemQuantity}>x{item.cantidad || 1}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-
-                <View style={styles.totalsContainer}>
-                  <Text style={styles.totalItems}>
-                    Estado:{' '}
-                    {entrega.estado === 'abierta' && !entrega.pedidoid
-                      ? '🟡 Abierta'
-                      : '🔒 Cerrada'}
-                  </Text>
-                  <Text style={styles.totalUnidades}>
-                    Total: {entrega.totalUnidades}{' '}
-                    {entrega.totalUnidades === 1 ? 'unidad' : 'unidades'}
+                <View
+                  style={[
+                    styles.movimientoBadge,
+                    { backgroundColor: getMovimientoColor(item.movimiento) + '20' },
+                  ]}
+                >
+                  <Text
+                    style={[styles.movimientoText, { color: getMovimientoColor(item.movimiento) }]}
+                  >
+                    {getMovimientoIcon(item.movimiento)} {item.movimiento}
                   </Text>
                 </View>
               </View>
+              <View style={styles.cardRow}>
+                <Text style={styles.idMedText}>ID: {item.id_med || 'N/A'}</Text>
+                <Text style={styles.cantidadText}>Cant: {item.cantidad}</Text>
+              </View>
+              <View style={styles.cardRow}>
+                <User size={12} color="#6B7280" />
+                <Text style={styles.userText}>{item.user || 'Desconocido'}</Text>
+              </View>
             </View>
-          );
-        })
-      )}
+          ))
+        )}
+      </ScrollView>
 
       {/* Modal de filtros */}
       <Modal visible={showFilterModal} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingScrollView style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Filtrar entregas</Text>
+              <Text style={styles.modalTitle}>Filtrar movimientos</Text>
               <TouchableOpacity onPress={() => setShowFilterModal(false)}>
                 <X color="#6B7280" size={24} />
               </TouchableOpacity>
             </View>
             <View style={styles.filterForm}>
-              <View style={styles.filterInputGroup}>
-                <Text style={styles.filterLabel}>Destino</Text>
-                <TextInput
-                  style={styles.filterInput}
-                  placeholder="Nombre del destino..."
-                  placeholderTextColor="#9CA3AF"
-                  value={tempFilters.destino}
-                  onChangeText={(text) => setTempFilters((prev) => ({ ...prev, destino: text }))}
-                />
+              <Text style={styles.filterLabel}>Tipo de movimiento</Text>
+              <View style={styles.movimientoOptions}>
+                {['todos', 'Añadiendo', 'Entregando', 'Desactivando', 'Reactivando'].map((tipo) => (
+                  <TouchableOpacity
+                    key={tipo}
+                    style={[
+                      styles.optionChip,
+                      tempFilters.movimiento === tipo && styles.optionChipActive,
+                    ]}
+                    onPress={() => setTempFilters((prev) => ({ ...prev, movimiento: tipo }))}
+                  >
+                    <Text
+                      style={[
+                        styles.optionChipText,
+                        tempFilters.movimiento === tipo && styles.optionChipTextActive,
+                      ]}
+                    >
+                      {tipo === 'todos' ? 'Todos' : tipo}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
-              <View style={styles.filterInputGroup}>
-                <Text style={styles.filterLabel}>Medicamento</Text>
-                <TextInput
-                  style={styles.filterInput}
-                  placeholder="Nombre del medicamento..."
-                  placeholderTextColor="#9CA3AF"
-                  value={tempFilters.medicamento}
-                  onChangeText={(text) =>
-                    setTempFilters((prev) => ({ ...prev, medicamento: text }))
-                  }
-                />
-              </View>
-              <Text style={styles.filterLabel}>Fecha de entrega</Text>
+
+              <Text style={styles.filterLabel}>Fecha de movimiento</Text>
               <View style={styles.dateRangeContainer}>
                 <TouchableOpacity
                   style={styles.dateButton}
@@ -509,7 +471,7 @@ export default function HistoryScreen() {
                       tempFilters.fechaDesde && styles.dateButtonTextSelected,
                     ]}
                   >
-                    {tempFilters.fechaDesde ? formatDisplayDate(tempFilters.fechaDesde) : 'Desde'}
+                    {tempFilters.fechaDesde ? formatDateShort(tempFilters.fechaDesde) : 'Desde'}
                   </Text>
                 </TouchableOpacity>
                 <Text style={styles.dateSeparator}>—</Text>
@@ -524,26 +486,16 @@ export default function HistoryScreen() {
                       tempFilters.fechaHasta && styles.dateButtonTextSelected,
                     ]}
                   >
-                    {tempFilters.fechaHasta ? formatDisplayDate(tempFilters.fechaHasta) : 'Hasta'}
+                    {tempFilters.fechaHasta ? formatDateShort(tempFilters.fechaHasta) : 'Hasta'}
                   </Text>
                 </TouchableOpacity>
               </View>
-              {(tempFilters.fechaDesde || tempFilters.fechaHasta) && (
-                <TouchableOpacity
-                  style={styles.clearDatesButton}
-                  onPress={() =>
-                    setTempFilters((prev) => ({ ...prev, fechaDesde: '', fechaHasta: '' }))
-                  }
-                >
-                  <X color="#6B7280" size={14} />
-                  <Text style={styles.clearDatesText}>Limpiar fechas</Text>
-                </TouchableOpacity>
-              )}
+
               <View style={styles.modalButtons}>
                 <TouchableOpacity style={styles.clearAllButtonModal} onPress={clearFilters}>
                   <Text style={styles.clearAllButtonText}>Limpiar todo</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.applyButton} onPress={applyFilters}>
+                <TouchableOpacity style={styles.applyButton} onPress={applyFiltersModal}>
                   <Check color="white" size={18} />
                   <Text style={styles.applyButtonText}>Aplicar filtros</Text>
                 </TouchableOpacity>
@@ -561,11 +513,10 @@ export default function HistoryScreen() {
           onChange={(event, date) => handleDateChange(event, date, showDatePicker)}
         />
       )}
-    </ScrollView>
+    </View>
   );
 }
 
-// ── Estilos ───────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
@@ -594,23 +545,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   filterBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
-  filtersContainer: {
-    backgroundColor: 'white',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+  searchSection: { backgroundColor: 'white', padding: 16, paddingBottom: 8 },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    marginBottom: 12,
   },
-  filterChip: {
+  searchInput: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#1F2937' },
+  filterChips: { flexDirection: 'row', marginBottom: 4 },
+  chip: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 6,
     backgroundColor: '#F3F4F6',
     borderRadius: 20,
     marginRight: 8,
   },
-  filterChipActive: { backgroundColor: '#7C3AED' },
-  filterChipText: { color: '#4B5563', fontWeight: '500', fontSize: 13 },
-  filterChipTextActive: { color: 'white' },
+  chipActive: { backgroundColor: '#7C3AED' },
+  chipText: { color: '#4B5563', fontSize: 13 },
+  chipTextActive: { color: 'white' },
   statsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -621,93 +576,50 @@ const styles = StyleSheet.create({
   statCard: {
     flex: 1,
     backgroundColor: 'white',
-    padding: 16,
+    padding: 12,
     borderRadius: 12,
     alignItems: 'center',
-    elevation: 2,
   },
-  statNumber: { fontSize: 24, fontWeight: 'bold', color: '#7C3AED' },
-  statLabel: { fontSize: 12, color: '#6B7280', marginTop: 4, textAlign: 'center' },
-  clearFiltersButton: {
+  statNumber: { fontSize: 20, fontWeight: 'bold', color: '#7C3AED' },
+  statLabel: { fontSize: 11, color: '#6B7280', marginTop: 4 },
+  pdfButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#EDE9FE',
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 4,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 6,
   },
-  clearFiltersText: { fontSize: 12, color: '#6B7280' },
-  emptyContainer: { alignItems: 'center', justifyContent: 'center', padding: 40, marginTop: 20 },
+  pdfButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 12 },
+  content: { flex: 1, padding: 16 },
+  emptyContainer: { alignItems: 'center', paddingVertical: 40 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
   emptyText: { fontSize: 14, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
   clearAllButton: { marginTop: 16, padding: 12, backgroundColor: '#7C3AED', borderRadius: 8 },
   clearAllButtonText: { color: 'white', fontWeight: '600' },
-  card: {
+  historyCard: {
     backgroundColor: 'white',
-    marginHorizontal: 16,
-    marginVertical: 8,
-    borderRadius: 16,
-    elevation: 2,
-    overflow: 'hidden',
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 12,
+    elevation: 1,
+    borderLeftWidth: 3,
+    borderLeftColor: '#7C3AED',
   },
-  cardHeader: {
+  cardRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#F9FAFB',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    marginBottom: 6,
   },
-  cardHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  cardHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  cardDate: { fontSize: 14, color: '#4B5563', fontWeight: '500' },
-  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
-  badgeVinculado: { backgroundColor: '#7C3AED' },
-  badgeHuerfano: { backgroundColor: '#6B7280' },
-  badgeText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
-  cardBody: { padding: 16 },
-  destinoContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 },
-  destinoLabel: { fontSize: 14, fontWeight: '600', color: '#374151' },
-  destinoText: { fontSize: 14, color: '#4B5563', flex: 1 },
-  notasText: { fontSize: 14, color: '#6B7280', fontStyle: 'italic' },
-  pedidoInfoContainer: {
-    backgroundColor: '#F3F4F6',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  pedidoInfoTitle: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 },
-  pedidoInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  pedidoInfoLabel: { fontSize: 12, color: '#6B7280', marginLeft: 2 },
-  pedidoInfoValue: { fontSize: 12, color: '#1F2937', fontWeight: '500', flex: 1 },
-  itemsResume: { fontSize: 13, color: '#6B7280', fontStyle: 'italic', marginTop: 4 },
-  itemsContainer: { marginTop: 12, padding: 12, backgroundColor: '#F3F4F6', borderRadius: 12 },
-  itemsTitle: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
-  itemRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-    gap: 8,
-  },
-  itemInfo: { flex: 1 },
-  itemName: { fontSize: 14, fontWeight: '500', color: '#1F2937' },
-  itemPresentation: { fontSize: 12, color: '#6B7280' },
-  itemUbicacion: { fontSize: 11, color: '#10B981', marginTop: 2 },
-  itemQuantity: { fontSize: 14, fontWeight: 'bold', color: '#7C3AED' },
-  totalsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-  },
-  totalItems: { fontSize: 12, color: '#6B7280' },
-  totalUnidades: { fontSize: 12, fontWeight: '600', color: '#1F2937' },
+  dateContainer: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  dateText: { fontSize: 12, color: '#6B7280' },
+  movimientoBadge: { paddingHorizontal: 10, paddingVertical: 2, borderRadius: 12 },
+  movimientoText: { fontSize: 11, fontWeight: '600' },
+  idMedText: { fontSize: 13, fontWeight: '500', color: '#1F2937' },
+  cantidadText: { fontSize: 13, fontWeight: 'bold', color: '#7C3AED' },
+  userText: { fontSize: 11, color: '#6B7280', marginLeft: 4, flex: 1 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -731,23 +643,23 @@ const styles = StyleSheet.create({
   },
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
   filterForm: { padding: 20 },
-  filterInputGroup: { marginBottom: 20 },
   filterLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
-  filterInput: {
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 14,
-    color: '#1F2937',
+  movimientoOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  optionChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
   },
+  optionChipActive: { backgroundColor: '#7C3AED' },
+  optionChipText: { color: '#4B5563', fontSize: 13 },
+  optionChipTextActive: { color: 'white' },
   dateRangeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-    marginBottom: 12,
+    marginBottom: 20,
   },
   dateButton: {
     flex: 1,
@@ -759,10 +671,9 @@ const styles = StyleSheet.create({
     borderColor: '#D1D5DB',
     borderRadius: 10,
     paddingVertical: 10,
-    paddingHorizontal: 4,
     gap: 6,
   },
-  dateButtonText: { fontSize: 12, color: '#1F2937', flexShrink: 1 },
+  dateButtonText: { fontSize: 12, color: '#1F2937' },
   dateButtonTextSelected: { color: '#7C3AED', fontWeight: '500' },
   dateSeparator: { fontSize: 14, color: '#6B7280', paddingHorizontal: 4 },
   modalButtons: { flexDirection: 'row', gap: 12, marginTop: 8 },
@@ -784,14 +695,4 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   applyButtonText: { color: 'white', fontSize: 14, fontWeight: '600' },
-  clearDatesButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    marginTop: 8,
-    marginBottom: 16,
-    gap: 4,
-  },
-  clearDatesText: { fontSize: 12, color: '#6B7280' },
 });

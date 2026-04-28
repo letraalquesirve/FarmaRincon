@@ -57,6 +57,20 @@ export default function EntregasScreen({ user }) {
   const isLoadingRef = useRef(false);
   const getUserName = () => user?.nombre || 'usuario';
 
+  const registrarHistory = async (idMed, fecha, user, movimiento, cantidad) => {
+    try {
+      await pb.collection('history').create({
+        id_med: idMed,
+        fecha: fecha,
+        user: user,
+        movimiento: movimiento,
+        cantidad: cantidad,
+      });
+      console.log(`📝 History registrado: ${movimiento} - ${idMed}`);
+    } catch (error) {
+      console.error('Error registrando history:', error);
+    }
+  };
   // ── Cargar datos ──────────────────────────────────────────
   const loadData = useCallback(async (isRefresh = false) => {
     if (isLoadingRef.current) return;
@@ -258,6 +272,13 @@ export default function EntregasScreen({ user }) {
         const medicamentoActual = medicamentos.find((m) => m.id === med.medicamentoId);
         const nuevaCantidad = medicamentoActual.cantidad - med.cantidad;
         await pb.collection('medicamentos').update(med.medicamentoId, { cantidad: nuevaCantidad });
+        await registrarHistory(
+          med.medicamentoId,
+          new Date().toISOString(),
+          getUserName(),
+          'Entregando',
+          med.cantidad
+        );
         if (nuevaCantidad <= 10) {
           await sendLocalNotification(
             '📦 Stock bajo',
@@ -309,6 +330,13 @@ export default function EntregasScreen({ user }) {
             fechaAgregado: new Date().toISOString(),
           });
         }
+        await registrarHistory(
+          nuevoMed.medicamentoId,
+          new Date().toISOString(),
+          getUserName(),
+          'Entregando',
+          nuevoMed.cantidad
+        );
       }
 
       await pb.collection('entregas').update(entrega.id, {

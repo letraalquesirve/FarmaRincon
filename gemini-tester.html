@@ -1,0 +1,1009 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gemini API Tester - Todos los Modelos</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        min-height: 100vh;
+        margin: 0;
+        padding: 20px;
+      }
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+      h1 {
+        color: white;
+        text-align: center;
+        margin-bottom: 10px;
+      }
+      .subtitle {
+        color: #aaa;
+        text-align: center;
+        margin-bottom: 30px;
+      }
+      .model-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+      }
+      .model-card {
+        background: white;
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        transition: transform 0.2s;
+      }
+      .model-card:hover {
+        transform: translateY(-5px);
+      }
+      .model-name {
+        font-size: 1.3rem;
+        font-weight: bold;
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid #7c3aed;
+      }
+      .model-desc {
+        font-size: 0.85rem;
+        color: #666;
+        margin-bottom: 15px;
+      }
+      .badge {
+        display: inline-block;
+        background: #e0e7ff;
+        color: #4338ca;
+        padding: 4px 10px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        margin-right: 8px;
+        margin-bottom: 8px;
+      }
+      .badge.paid {
+        background: #fef3c7;
+        color: #92400e;
+      }
+      .badge.free {
+        background: #d1fae5;
+        color: #065f46;
+      }
+      .api-section {
+        background: white;
+        border-radius: 16px;
+        padding: 25px;
+        margin-bottom: 25px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      }
+      .section-title {
+        font-size: 1.2rem;
+        font-weight: bold;
+        margin-bottom: 15px;
+        color: #333;
+        border-left: 4px solid #7c3aed;
+        padding-left: 12px;
+      }
+      input,
+      textarea,
+      select {
+        width: 100%;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        font-size: 14px;
+        margin-bottom: 15px;
+      }
+      button {
+        background: #7c3aed;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 10px;
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.3s;
+      }
+      button:hover {
+        background: #5b21b6;
+        transform: scale(1.02);
+      }
+      button:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+      .result {
+        background: #f5f5f5;
+        border-radius: 10px;
+        padding: 15px;
+        margin-top: 15px;
+        font-family: monospace;
+        font-size: 13px;
+        max-height: 400px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+      .image-preview {
+        max-width: 150px;
+        margin: 10px 0;
+        border-radius: 10px;
+      }
+      .row {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+      .col {
+        flex: 1;
+        min-width: 250px;
+      }
+      .tab-buttons {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+      }
+      .tab-btn {
+        background: #e5e7eb;
+        color: #374151;
+        padding: 10px 20px;
+      }
+      .tab-btn.active {
+        background: #7c3aed;
+        color: white;
+      }
+      .tab-pane {
+        display: none;
+      }
+      .tab-pane.active {
+        display: block;
+      }
+      .status {
+        padding: 10px;
+        border-radius: 8px;
+        margin-top: 10px;
+      }
+      .status.success {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+      .status.error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+      }
+      .status.info {
+        background: #d1ecf1;
+        color: #0c5460;
+        border: 1px solid #bee5eb;
+      }
+      .pricing {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 15px;
+        margin-top: 15px;
+      }
+      .pricing-card {
+        background: #f9fafb;
+        border-radius: 12px;
+        padding: 15px;
+        border-left: 3px solid #7c3aed;
+      }
+      .pricing-price {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #7c3aed;
+      }
+      hr {
+        margin: 20px 0;
+        border: none;
+        border-top: 1px solid #e5e7eb;
+      }
+      code {
+        background: #f3f4f6;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🤖 Gemini API - Todos los Modelos</h1>
+      <div class="subtitle">Herramienta completa para probar todos los modelos de Gemini</div>
+
+      <!-- Configuración Global -->
+      <div class="api-section">
+        <div class="section-title">⚙️ Configuración Global</div>
+        <div class="row">
+          <div class="col">
+            <label>🔑 API Key:</label>
+            <input
+              type="text"
+              id="apiKey"
+              placeholder="Ingresa tu API Key de Google AI Studio"
+              style="font-family: monospace"
+            />
+            <button id="saveApiKeyBtn">💾 Guardar API Key</button>
+          </div>
+          <div class="col">
+            <label>📡 Base URL:</label>
+            <input
+              type="text"
+              id="baseUrl"
+              value="https://generativelanguage.googleapis.com/v1beta"
+              placeholder="API Base URL"
+            />
+            <small style="color: #666"
+              >Por defecto: https://generativelanguage.googleapis.com/v1beta</small
+            >
+          </div>
+        </div>
+        <div id="globalStatus"></div>
+      </div>
+
+      <!-- Modelos disponibles -->
+      <div class="api-section">
+        <div class="section-title">📋 Modelos Disponibles</div>
+        <div class="model-grid" id="modelsList">
+          <!-- Se llenará dinámicamente -->
+        </div>
+      </div>
+
+      <!-- Tabs para pruebas -->
+      <div class="api-section">
+        <div class="section-title">🧪 Probar Modelos</div>
+        <div class="tab-buttons">
+          <button class="tab-btn active" data-tab="text">📝 Texto (Categorización)</button>
+          <button class="tab-btn" data-tab="vision">🖼️ Visión (Imagen)</button>
+          <button class="tab-btn" data-tab="stream">🌊 Streaming</button>
+          <button class="tab-btn" data-tab="batch">📦 Batch (Múltiples)</button>
+          <button class="tab-btn" data-tab="system">⚙️ System Instructions</button>
+          <button class="tab-btn" data-tab="json">📊 JSON Mode</button>
+        </div>
+
+        <!-- Tab 1: Texto -->
+        <div id="tab-text" class="tab-pane active">
+          <div class="row">
+            <div class="col">
+              <label>🎯 Modelo:</label>
+              <select id="textModel">
+                <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
+                <option value="gemini-1.5-flash">💨 Gemini 1.5 Flash</option>
+                <option value="gemini-1.5-pro">🚀 Gemini 1.5 Pro</option>
+                <option value="gemini-2.0-pro-exp">🧪 Gemini 2.0 Pro Exp</option>
+              </select>
+              <label>💊 Nombre del medicamento:</label>
+              <input
+                type="text"
+                id="medName"
+                placeholder="Ej: Paracetamol, Ibuprofeno, Amoxicilina, Losartán"
+              />
+              <label>📝 Prompt personalizado (opcional):</label>
+              <textarea
+                id="customPrompt"
+                rows="2"
+                placeholder="Deja vacío para usar prompt por defecto"
+              ></textarea>
+              <button id="testTextBtn">🔍 Consultar Categoría</button>
+            </div>
+            <div class="col">
+              <div id="textResult" class="result" style="display: none"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Visión con imagen -->
+        <div id="tab-vision" class="tab-pane">
+          <div class="row">
+            <div class="col">
+              <label>🎯 Modelo:</label>
+              <select id="visionModel">
+                <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
+                <option value="gemini-1.5-flash">💨 Gemini 1.5 Flash</option>
+                <option value="gemini-1.5-pro">🚀 Gemini 1.5 Pro</option>
+              </select>
+              <label>🖼️ Imagen del medicamento:</label>
+              <input type="file" id="imageInput" accept="image/*" capture="environment" />
+              <div id="imagePreview"></div>
+              <label>📝 Prompt:</label>
+              <textarea id="visionPrompt" rows="3">
+Analiza esta imagen y extrae: nombre, presentación, categoría farmacológica y fecha de vencimiento. Responde SOLO con JSON.</textarea
+              >
+              <button id="testVisionBtn">📸 Analizar Imagen</button>
+            </div>
+            <div class="col">
+              <div id="visionResult" class="result" style="display: none"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Streaming -->
+        <div id="tab-stream" class="tab-pane">
+          <div class="row">
+            <div class="col">
+              <label>🎯 Modelo:</label>
+              <select id="streamModel">
+                <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
+                <option value="gemini-1.5-flash">💨 Gemini 1.5 Flash</option>
+                <option value="gemini-1.5-pro">🚀 Gemini 1.5 Pro</option>
+              </select>
+              <label>💊 Medicamento o tema:</label>
+              <input
+                type="text"
+                id="streamTopic"
+                placeholder="Ej: Explicación del Paracetamol para pacientes"
+              />
+              <button id="testStreamBtn">🌊 Probar Streaming</button>
+            </div>
+            <div class="col">
+              <div id="streamResult" class="result" style="display: none"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Batch (múltiples consultas) -->
+        <div id="tab-batch" class="tab-pane">
+          <div class="row">
+            <div class="col">
+              <label>🎯 Modelo:</label>
+              <select id="batchModel">
+                <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
+                <option value="gemini-1.5-flash">💨 Gemini 1.5 Flash</option>
+              </select>
+              <label>📋 Lista de medicamentos (uno por línea):</label>
+              <textarea
+                id="batchList"
+                rows="6"
+                placeholder="Paracetamol&#10;Ibuprofeno&#10;Amoxicilina&#10;Losartán&#10;Metformina"
+              ></textarea>
+              <button id="testBatchBtn">📦 Consultar Todos</button>
+            </div>
+            <div class="col">
+              <div id="batchResult" class="result" style="display: none"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 5: System Instructions -->
+        <div id="tab-system" class="tab-pane">
+          <div class="row">
+            <div class="col">
+              <label>🎯 Modelo:</label>
+              <select id="systemModel">
+                <option value="gemini-1.5-pro">🚀 Gemini 1.5 Pro (recomendado)</option>
+                <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
+              </select>
+              <label>⚙️ Instrucción del Sistema:</label>
+              <textarea id="systemInstruction" rows="4">
+Eres un farmacéutico experto. Responde siempre en español, de manera clara y concisa. Enfócate en dar información útil para pacientes.</textarea
+              >
+              <label>💬 Consulta del usuario:</label>
+              <input
+                type="text"
+                id="systemQuery"
+                placeholder="Ej: ¿Qué interacciones tiene el ibuprofeno?"
+              />
+              <button id="testSystemBtn">⚙️ Ejecutar con System Instructions</button>
+            </div>
+            <div class="col">
+              <div id="systemResult" class="result" style="display: none"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 6: JSON Mode -->
+        <div id="tab-json" class="tab-pane">
+          <div class="row">
+            <div class="col">
+              <label>🎯 Modelo:</label>
+              <select id="jsonModel">
+                <option value="gemini-2.0-flash">⚡ Gemini 2.0 Flash</option>
+                <option value="gemini-1.5-pro">🚀 Gemini 1.5 Pro</option>
+              </select>
+              <label>📝 Input (texto a estructurar):</label>
+              <textarea
+                id="jsonInput"
+                rows="4"
+                placeholder="Ej: El medicamento Paracetamol se usa para la fiebre y el dolor. Se presenta en tabletas de 500mg y 1g. La dosis recomendada es 500mg cada 8 horas."
+              ></textarea>
+              <button id="testJsonBtn">📊 Generar JSON</button>
+            </div>
+            <div class="col">
+              <div id="jsonResult" class="result" style="display: none"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Precios y Referencia -->
+      <div class="api-section">
+        <div class="section-title">💰 Precios por Millón de Tokens (actualizado 2026)</div>
+        <div class="pricing">
+          <div class="pricing-card">
+            <div><span class="badge free">Gratis</span> <span class="badge">Cuota</span></div>
+            <div class="pricing-price">$0</div>
+            <div>60 solicitudes/minuto<br />1M tokens/minuto</div>
+          </div>
+          <div class="pricing-card">
+            <div><span class="badge paid">💰 Gemini 2.0 Flash</span></div>
+            <div class="pricing-price">$0.075 / 1M tokens input</div>
+            <div>$0.30 / 1M tokens output</div>
+            <small>Contexto ≤200k tokens</small>
+          </div>
+          <div class="pricing-card">
+            <div><span class="badge paid">💰 Gemini 1.5 Flash</span></div>
+            <div class="pricing-price">$0.075 / 1M tokens input</div>
+            <div>$0.30 / 1M tokens output</div>
+          </div>
+          <div class="pricing-card">
+            <div><span class="badge paid">💰 Gemini 1.5 Pro</span></div>
+            <div class="pricing-price">$1.25 / 1M tokens input</div>
+            <div>$5.00 / 1M tokens output</div>
+          </div>
+          <div class="pricing-card">
+            <div><span class="badge paid">💰 Gemini 2.0 Pro Exp</span></div>
+            <div class="pricing-price">$2.00 / 1M tokens input</div>
+            <div>$12.00 / 1M tokens output</div>
+          </div>
+        </div>
+        <hr />
+        <details>
+          <summary style="cursor: pointer; font-weight: bold">
+            📚 Modelos Gemini - Lista Completa
+          </summary>
+          <pre
+            style="
+              margin-top: 15px;
+              background: #f5f5f5;
+              padding: 15px;
+              border-radius: 10px;
+              overflow-x: auto;
+            "
+          >
+<code>╔═══════════════════════════════════════════════════════════════════════════════╗
+║                         MODELOS GEMINI DISPONIBLES                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                                 ║
+║  🔥 MODELOS RÁPIDOS (FLASH)                                                     ║
+║  ──────────────────────────────────────────────────────────────────────────────║
+║  • gemini-2.0-flash       → 2.0 Flash (rápido, económico, multimodal)          ║
+║  • gemini-1.5-flash       → 1.5 Flash (balance velocidad/calidad)               ║
+║  • gemini-1.5-flash-8b    → 1.5 Flash 8B (más pequeño, más rápido)             ║
+║                                                                                 ║
+║  🚀 MODELOS PRO (MAYOR CALIDAD)                                                 ║
+║  ──────────────────────────────────────────────────────────────────────────────║
+║  • gemini-2.0-pro-exp     → 2.0 Pro (experimental, mayor capacidad)            ║
+║  • gemini-1.5-pro         → 1.5 Pro (alta calidad, 2M contexto)                ║
+║  • gemini-1.0-pro         → 1.0 Pro (versión anterior)                         ║
+║                                                                                 ║
+║  🎯 MODELOS PARA TAREAS ESPECÍFICAS                                             ║
+║  ──────────────────────────────────────────────────────────────────────────────║
+║  • gemini-1.5-flash-8b    → Tareas simples, menor costo                        ║
+║  • gemini-embedding-exp   → Embeddings (búsqueda semántica)                    ║
+║  • text-embedding-004     → Embeddings tradicionales                           ║
+║                                                                                 ║
+║  📊 CÓMO CONSUMIR LOS SERVICIOS:                                                ║
+║  ──────────────────────────────────────────────────────────────────────────────║
+║                                                                                 ║
+║  1. TEXTO (Generación de texto):                                               ║
+║     POST /models/{model}:generateContent                                        ║
+║                                                                                 ║
+║  2. STREAMING (respuesta en tiempo real):                                      ║
+║     POST /models/{model}:streamGenerateContent?alt=sse                         ║
+║                                                                                 ║
+║  3. VISIÓN (imagen + texto):                                                   ║
+║     Misma API que texto, incluyendo inline_data en parts                       ║
+║                                                                                 ║
+║  4. SYSTEM INSTRUCTIONS:                                                        ║
+║     Agregar campo "system_instruction" en el body                              ║
+║                                                                                 ║
+║  5. JSON MODE (respuesta estructurada):                                        ║
+║     Usar "response_mime_type": "application/json"                              ║
+║                                                                                 ║
+║  6. BATCH (múltiples consultas):                                               ║
+║     Varias llamadas individuales o usar batch API                              ║
+║                                                                                 ║
+║  7. EMBEDDINGS (vectores):                                                     ║
+║     POST /models/text-embedding-004:embedContent                               ║
+║                                                                                 ║
+╚═══════════════════════════════════════════════════════════════════════════════╝</code>
+                </pre>
+        </details>
+      </div>
+    </div>
+
+    <script>
+      // ============================================================
+      // CONFIGURACIÓN Y VARIABLES GLOBALES
+      // ============================================================
+      const STORAGE_KEY = 'gemini_api_key';
+      const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+
+      // Cargar API Key guardada
+      const savedKey = localStorage.getItem(STORAGE_KEY);
+      if (savedKey) {
+        document.getElementById('apiKey').value = savedKey;
+      }
+
+      const baseUrlInput = document.getElementById('baseUrl');
+      const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+      const globalStatus = document.getElementById('globalStatus');
+
+      // Guardar API Key
+      saveApiKeyBtn.addEventListener('click', () => {
+        const key = document.getElementById('apiKey').value.trim();
+        if (key) {
+          localStorage.setItem(STORAGE_KEY, key);
+          showStatus(globalStatus, '✅ API Key guardada correctamente', 'success');
+        } else {
+          showStatus(globalStatus, '❌ Ingresa una API Key válida', 'error');
+        }
+      });
+
+      function showStatus(container, message, type) {
+        const div = document.createElement('div');
+        div.className = `status ${type}`;
+        div.textContent = message;
+        container.innerHTML = '';
+        container.appendChild(div);
+        setTimeout(() => div.remove(), 5000);
+      }
+
+      function getApiKey() {
+        const key = document.getElementById('apiKey').value.trim();
+        if (!key) throw new Error('No hay API Key configurada');
+        return key;
+      }
+
+      function getBaseUrl() {
+        let url = baseUrlInput.value.trim();
+        if (!url) url = DEFAULT_BASE_URL;
+        return url;
+      }
+
+      // Mostrar lista de modelos
+      function renderModels() {
+        const models = [
+          {
+            name: 'gemini-2.0-flash',
+            desc: 'Modelo más rápido y económico. Ideal para tareas diarias como categorización.',
+            free: true,
+            multimodal: true,
+          },
+          {
+            name: 'gemini-1.5-flash',
+            desc: 'Buen balance entre velocidad y calidad. Soporta 1M tokens de contexto.',
+            free: true,
+            multimodal: true,
+          },
+          {
+            name: 'gemini-1.5-pro',
+            desc: 'Mayor calidad, ideal para tareas complejas. Soporta 2M tokens.',
+            free: false,
+            multimodal: true,
+          },
+          {
+            name: 'gemini-2.0-pro-exp',
+            desc: 'Versión experimental de Gemini 2.0 Pro. Calidad superior.',
+            free: false,
+            multimodal: true,
+          },
+          {
+            name: 'gemini-1.5-flash-8b',
+            desc: 'Modelo más pequeño, extremadamente rápido para tareas simples.',
+            free: true,
+            multimodal: false,
+          },
+          {
+            name: 'text-embedding-004',
+            desc: 'Embeddings para búsqueda semántica y similitud.',
+            free: false,
+            multimodal: false,
+          },
+        ];
+
+        const container = document.getElementById('modelsList');
+        container.innerHTML = models
+          .map(
+            (m) => `
+                <div class="model-card">
+                    <div class="model-name"><code>${m.name}</code></div>
+                    <div class="model-desc">${m.desc}</div>
+                    <div>
+                        <span class="badge ${m.free ? 'free' : 'paid'}">${m.free ? 'Cuota gratuita' : 'Pago por uso'}</span>
+                        ${m.multimodal ? '<span class="badge">📷 Multimodal</span>' : ''}
+                    </div>
+                </div>
+            `
+          )
+          .join('');
+      }
+
+      // ============================================================
+      // FUNCIONES DE API
+      // ============================================================
+      async function callGeminiAPI(model, prompt, options = {}) {
+        const apiKey = getApiKey();
+        const baseUrl = getBaseUrl();
+        const url = `${baseUrl}/models/${model}:generateContent?key=${apiKey}`;
+
+        const body = { contents: [{ parts: [{ text: prompt }] }] };
+
+        // System instruction
+        if (options.systemInstruction) {
+          body.system_instruction = { parts: [{ text: options.systemInstruction }] };
+        }
+
+        // JSON mode
+        if (options.jsonMode) {
+          body.generationConfig = { response_mime_type: 'application/json' };
+        }
+
+        // Temperatura
+        if (options.temperature !== undefined) {
+          body.generationConfig = body.generationConfig || {};
+          body.generationConfig.temperature = options.temperature;
+        }
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(`${response.status}: ${error.error?.message || response.statusText}`);
+        }
+
+        return await response.json();
+      }
+
+      async function callGeminiVision(model, prompt, imageBase64, mimeType = 'image/jpeg') {
+        const apiKey = getApiKey();
+        const baseUrl = getBaseUrl();
+        const url = `${baseUrl}/models/${model}:generateContent?key=${apiKey}`;
+
+        const body = {
+          contents: [
+            {
+              parts: [
+                { inline_data: { mime_type: mimeType, data: imageBase64 } },
+                { text: prompt },
+              ],
+            },
+          ],
+        };
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(`${response.status}: ${error.error?.message || response.statusText}`);
+        }
+
+        return await response.json();
+      }
+
+      async function callGeminiStream(model, prompt, onChunk) {
+        const apiKey = getApiKey();
+        const baseUrl = getBaseUrl();
+        const url = `${baseUrl}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`${response.status}: ${response.statusText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+                  const text = data.candidates[0].content.parts[0].text;
+                  if (text && onChunk) onChunk(text);
+                }
+              } catch (e) {
+                /* Ignorar líneas no JSON */
+              }
+            }
+          }
+        }
+      }
+
+      // ============================================================
+      // EVENTOS DE LOS TABS
+      // ============================================================
+
+      // Tab switching
+      document.querySelectorAll('.tab-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const tabId = btn.dataset.tab;
+          document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          document.querySelectorAll('.tab-pane').forEach((pane) => pane.classList.remove('active'));
+          document.getElementById(`tab-${tabId}`).classList.add('active');
+        });
+      });
+
+      // Texto
+      document.getElementById('testTextBtn').addEventListener('click', async () => {
+        const model = document.getElementById('textModel').value;
+        const medicamento = document.getElementById('medName').value.trim();
+        const customPrompt = document.getElementById('customPrompt').value.trim();
+        const resultDiv = document.getElementById('textResult');
+
+        if (!medicamento) {
+          showResult(resultDiv, '❌ Ingresa el nombre de un medicamento', true);
+          return;
+        }
+
+        const prompt =
+          customPrompt ||
+          `Cuál es la categoría farmacológica de "${medicamento}"? Responde SOLO con una palabra o frase corta (máximo 2-3 palabras). Ejemplos: "Analgésico", "Antibiótico", "Antiinflamatorio".`;
+
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = '🔄 Consultando...';
+
+        try {
+          const data = await callGeminiAPI(model, prompt);
+          let response = 'No se recibió respuesta';
+          if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+            response = data.candidates[0].content.parts[0].text;
+          }
+          const html = `
+                    <div style="background:#e8f4e8; padding:10px; border-radius:8px; margin-bottom:10px;">
+                        <strong>🏷️ Respuesta:</strong><br>
+                        <span style="font-size:18px; font-weight:bold; color:#7C3AED;">${escapeHtml(response)}</span>
+                    </div>
+                    <div style="font-size:11px; color:#666;">Modelo: ${model}</div>
+                `;
+          showResult(resultDiv, html);
+        } catch (error) {
+          showResult(resultDiv, `❌ Error: ${error.message}`, true);
+        }
+      });
+
+      // Visión
+      const imageInput = document.getElementById('imageInput');
+      const imagePreview = document.getElementById('imagePreview');
+
+      imageInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            imagePreview.innerHTML = `<img src="${ev.target.result}" class="image-preview" />`;
+          };
+          reader.readAsDataURL(file);
+        }
+      });
+
+      document.getElementById('testVisionBtn').addEventListener('click', async () => {
+        const model = document.getElementById('visionModel').value;
+        const file = imageInput.files[0];
+        const prompt = document.getElementById('visionPrompt').value;
+        const resultDiv = document.getElementById('visionResult');
+
+        if (!file) {
+          showResult(resultDiv, '❌ Selecciona una imagen', true);
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          const base64 = ev.target.result.split(',')[1];
+          const mimeType = file.type;
+
+          resultDiv.style.display = 'block';
+          resultDiv.innerHTML = '🔄 Analizando imagen...';
+
+          try {
+            const data = await callGeminiVision(model, prompt, base64, mimeType);
+            let response = 'No se recibió respuesta';
+            if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+              response = data.candidates[0].content.parts[0].text;
+            }
+            const html = `
+                        <div style="background:#e8f4e8; padding:10px; border-radius:8px;">
+                            <strong>📋 Resultado:</strong><br>
+                            <pre style="white-space:pre-wrap; margin-top:10px;">${escapeHtml(response)}</pre>
+                        </div>
+                    `;
+            showResult(resultDiv, html);
+          } catch (error) {
+            showResult(resultDiv, `❌ Error: ${error.message}`, true);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+
+      // Streaming
+      document.getElementById('testStreamBtn').addEventListener('click', async () => {
+        const model = document.getElementById('streamModel').value;
+        const topic = document.getElementById('streamTopic').value.trim();
+        const resultDiv = document.getElementById('streamResult');
+
+        if (!topic) {
+          showResult(resultDiv, '❌ Ingresa un tema', true);
+          return;
+        }
+
+        const prompt = `Explica de manera clara y concisa qué es ${topic} y para qué sirve.`;
+
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML =
+          '<span style="color:#7C3AED;">🌊 Streaming en curso...</span><div id="streamContent"></div>';
+        const contentDiv = document.getElementById('streamContent');
+        if (contentDiv) contentDiv.innerHTML = '';
+
+        try {
+          await callGeminiStream(model, prompt, (chunk) => {
+            if (contentDiv) {
+              contentDiv.innerHTML += chunk;
+            }
+          });
+        } catch (error) {
+          showResult(resultDiv, `❌ Error: ${error.message}`, true);
+        }
+      });
+
+      // Batch
+      document.getElementById('testBatchBtn').addEventListener('click', async () => {
+        const model = document.getElementById('batchModel').value;
+        const list = document.getElementById('batchList').value.trim();
+        const resultDiv = document.getElementById('batchResult');
+
+        if (!list) {
+          showResult(resultDiv, '❌ Ingresa lista de medicamentos', true);
+          return;
+        }
+
+        const medicamentos = list.split('\n').filter((m) => m.trim());
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = '🔄 Procesando...';
+
+        const results = [];
+        for (let i = 0; i < medicamentos.length; i++) {
+          const med = medicamentos[i].trim();
+          if (!med) continue;
+          resultDiv.innerHTML = `🔄 Procesando ${i + 1}/${medicamentos.length}: ${med}...`;
+          try {
+            const prompt = `Cuál es la categoría farmacológica de "${med}"? Responde SOLO con una palabra.`;
+            const data = await callGeminiAPI(model, prompt);
+            let categoria = 'No identificada';
+            if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+              categoria = data.candidates[0].content.parts[0].text;
+            }
+            results.push({ medicamento: med, categoria });
+          } catch (error) {
+            results.push({ medicamento: med, categoria: `Error: ${error.message}` });
+          }
+        }
+
+        const html = `<pre style="margin:0;">${JSON.stringify(results, null, 2)}</pre>`;
+        showResult(resultDiv, html);
+      });
+
+      // System Instructions
+      document.getElementById('testSystemBtn').addEventListener('click', async () => {
+        const model = document.getElementById('systemModel').value;
+        const systemInstruction = document.getElementById('systemInstruction').value;
+        const query = document.getElementById('systemQuery').value.trim();
+        const resultDiv = document.getElementById('systemResult');
+
+        if (!query) {
+          showResult(resultDiv, '❌ Ingresa una consulta', true);
+          return;
+        }
+
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = '🔄 Consultando...';
+
+        try {
+          const data = await callGeminiAPI(model, query, { systemInstruction });
+          let response = 'No se recibió respuesta';
+          if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+            response = data.candidates[0].content.parts[0].text;
+          }
+          const html = `
+                    <div style="background:#e8f4e8; padding:10px; border-radius:8px;">
+                        <strong>💬 Respuesta:</strong><br>
+                        <div style="margin-top:10px;">${escapeHtml(response)}</div>
+                    </div>
+                `;
+          showResult(resultDiv, html);
+        } catch (error) {
+          showResult(resultDiv, `❌ Error: ${error.message}`, true);
+        }
+      });
+
+      // JSON Mode
+      document.getElementById('testJsonBtn').addEventListener('click', async () => {
+        const model = document.getElementById('jsonModel').value;
+        const input = document.getElementById('jsonInput').value.trim();
+        const resultDiv = document.getElementById('jsonResult');
+
+        if (!input) {
+          showResult(resultDiv, '❌ Ingresa texto para estructurar', true);
+          return;
+        }
+
+        const prompt = `Extrae la siguiente información del texto y responde SOLO con JSON válido: 
+            {
+                "nombre": "nombre del medicamento",
+                "presentacion": "presentación",
+                "categoria": "categoría farmacológica",
+                "dosis": "dosis recomendada"
+            }
+            
+            Texto: ${input}`;
+
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = '🔄 Generando JSON...';
+
+        try {
+          const data = await callGeminiAPI(model, prompt, { jsonMode: true, temperature: 0.1 });
+          let response = 'No se recibió respuesta';
+          if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+            response = data.candidates[0].content.parts[0].text;
+            // Intentar formatear JSON
+            try {
+              const parsed = JSON.parse(response);
+              response = JSON.stringify(parsed, null, 2);
+            } catch (e) {}
+          }
+          const html = `<pre style="margin:0;">${escapeHtml(response)}</pre>`;
+          showResult(resultDiv, html);
+        } catch (error) {
+          showResult(resultDiv, `❌ Error: ${error.message}`, true);
+        }
+      });
+
+      function showResult(div, content, isError = false) {
+        div.style.display = 'block';
+        div.style.backgroundColor = isError ? '#f8d7da' : '#f5f5f5';
+        div.style.color = isError ? '#721c24' : '#333';
+        div.innerHTML = content;
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      // Inicializar
+      renderModels();
+    </script>
+  </body>
+</html>

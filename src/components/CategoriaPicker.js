@@ -1,4 +1,4 @@
-// src/components/CategoriaPicker.js - Versión con PocketBase
+// src/components/CategoriaPicker.js
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -13,10 +13,17 @@ import {
 import { Search, X } from 'lucide-react-native';
 import { pb } from '../services/PocketBaseConfig';
 
-export default function CategoriaPicker({ value, onChange, placeholder, showLabel = true }) {
+export default function CategoriaPicker({
+  value,
+  onChange,
+  onUbicacionChange, // ← Callback cuando se selecciona categoría (envía ubicación)
+  placeholder,
+  showLabel = true,
+}) {
   const [modalVisible, setModalVisible] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [categorias, setCategorias] = useState([]);
+  const [categoriasData, setCategoriasData] = useState([]); // Guardar objetos completos
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -28,57 +35,36 @@ export default function CategoriaPicker({ value, onChange, placeholder, showLabe
     try {
       const result = await pb.collection('categorias').getList(1, 100, {
         sort: 'nombre',
+        requestKey: null,
       });
+      setCategoriasData(result.items);
       setCategorias(result.items.map((item) => item.nombre));
     } catch (error) {
       console.error('Error cargando categorías:', error);
-      // Si falla, usar categorías por defecto
-      setCategorias([
-        'Analgésico',
-        'Antibiótico',
-        'Antiinflamatorio',
-        'Antihipertensivo',
-        'Antidiabético',
-        'Antihistamínico',
-        'Antidepresivo',
-        'Ansiolítico',
-        'Anticonvulsivante',
-        'Anticoagulante',
-        'Broncodilatador',
-        'Corticosteroide',
-        'Diurético',
-        'Relajante muscular',
-        'Vitaminas',
-        'Suplemento',
-        'Antiséptico',
-        'Antifúngico',
-        'Antiviral',
-        'Antiparasitario',
-        'Antiemético',
-        'Antiespasmódico',
-        'Laxante',
-        'Antidiarreico',
-        'Antiácido',
-        'Expectorante',
-        'Antitusivo',
-        'Descongestionante',
-        'Otros',
-      ]);
     } finally {
       setLoading(false);
     }
+  };
+
+  const getUbicacionByNombre = (nombreCategoria) => {
+    const categoria = categoriasData.find((c) => c.nombre === nombreCategoria);
+    return categoria?.ubicacion || '';
+  };
+
+  const selectCategoria = (categoriaNombre) => {
+    onChange(categoriaNombre);
+    const ubicacion = getUbicacionByNombre(categoriaNombre);
+    if (onUbicacionChange && ubicacion) {
+      onUbicacionChange(ubicacion);
+    }
+    setModalVisible(false);
+    setSearchTerm('');
   };
 
   const getFilteredCategorias = () => {
     if (!searchTerm.trim()) return categorias;
     const term = searchTerm.toLowerCase().trim();
     return categorias.filter((cat) => cat.toLowerCase().includes(term));
-  };
-
-  const selectCategoria = (categoria) => {
-    onChange(categoria);
-    setModalVisible(false);
-    setSearchTerm('');
   };
 
   return (
@@ -121,14 +107,22 @@ export default function CategoriaPicker({ value, onChange, placeholder, showLabe
                 data={getFilteredCategorias()}
                 keyExtractor={(item, index) => index.toString()}
                 style={styles.list}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.categoryItem}
-                    onPress={() => selectCategoria(item)}
-                  >
-                    <Text style={styles.categoryText}>{item}</Text>
-                  </TouchableOpacity>
-                )}
+                renderItem={({ item }) => {
+                  const ubicacion = getUbicacionByNombre(item);
+                  return (
+                    <TouchableOpacity
+                      style={styles.categoryItem}
+                      onPress={() => selectCategoria(item)}
+                    >
+                      <View>
+                        <Text style={styles.categoryText}>{item}</Text>
+                        {ubicacion ? (
+                          <Text style={styles.ubicacionText}>📍 {ubicacion}</Text>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
                 ListEmptyComponent={
                   <View style={styles.emptyContainer}>
                     <Text style={styles.emptyText}>No se encontraron categorías</Text>
@@ -186,6 +180,7 @@ const styles = StyleSheet.create({
   list: { flex: 1 },
   categoryItem: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
   categoryText: { fontSize: 16, color: '#1F2937' },
+  ubicacionText: { fontSize: 12, color: '#10B981', marginTop: 2 },
   emptyContainer: { alignItems: 'center', padding: 40 },
   emptyText: { fontSize: 14, color: '#9CA3AF' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
