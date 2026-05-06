@@ -1,12 +1,5 @@
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  TextInput,
-  StyleSheet,
-  Platform,
-} from 'react-native';
+import { View, Text, TouchableOpacity, TextInput, StyleSheet, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 export default function DatePickerInput({ label, value, onChange, placeholder, required }) {
@@ -30,11 +23,15 @@ export default function DatePickerInput({ label, value, onChange, placeholder, r
 
   return (
     <View style={styles.container}>
-      {label && <Text style={styles.label}>{label} {required && '*'}</Text>}
+      {label && (
+        <Text style={styles.label}>
+          {label} {required && '*'}
+        </Text>
+      )}
       <TouchableOpacity onPress={() => setShowPicker(true)} activeOpacity={0.7}>
-        <View style={styles.inputContainer}>
+        <View style={styles.pickerButton}>
           <TextInput
-            style={styles.input}
+            style={styles.pickerText}
             value={displayValue}
             placeholder={placeholder || 'Seleccionar fecha'}
             editable={false}
@@ -43,7 +40,7 @@ export default function DatePickerInput({ label, value, onChange, placeholder, r
           <Text style={styles.calendarIcon}>📅</Text>
         </View>
       </TouchableOpacity>
-      
+
       {showPicker && (
         <DateTimePicker
           value={tempDate}
@@ -84,5 +81,22 @@ const styles = StyleSheet.create({
   calendarIcon: {
     fontSize: 18,
     paddingHorizontal: 8,
+  },
+  pickerButton: {
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingVertical: 8, // ← aumentar vertical
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    minHeight: 48,
+    width: '100%', // ← asegurar ancho completo
+  },
+
+  pickerText: {
+    fontSize: 14, // ← reducir tamaño
+    color: '#1F2937',
+    paddingVertical: 4,
   },
 });

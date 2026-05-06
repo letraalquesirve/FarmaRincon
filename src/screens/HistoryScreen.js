@@ -1,4 +1,4 @@
-// src/screens/HistoryScreen.js - NUEVA VERSIÓN
+// src/screens/HistoryScreen.js - VERSIÓN CON STATS EN CHIPS Y PDF EN HEADER
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
@@ -24,6 +24,7 @@ import {
   Check,
   FileText,
   Clock,
+  Pill,
 } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
@@ -42,42 +43,43 @@ const escapeHtml = (text) => {
     .replace(/'/g, '&#39;');
 };
 
+const normalizeText = (text) => {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ''); // Eliminar caracteres especiales;
+};
+
 export default function HistoryScreen() {
   const [history, setHistory] = useState([]);
   const [filteredHistory, setFilteredHistory] = useState([]);
+  const [medicamentosCache, setMedicamentosCache] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterMovimiento, setFilterMovimiento] = useState('todos'); // todos, Añadiendo, Entregando, Desactivando, Reactivando
+  const [filterMovimiento, setFilterMovimiento] = useState('todos');
   const [generatingPDF, setGeneratingPDF] = useState(false);
-
+  const [processing, setProcessing] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [filters, setFilters] = useState({
     fechaDesde: '',
     fechaHasta: '',
     movimiento: '',
+    medicamento: '',
   });
   const [tempFilters, setTempFilters] = useState({
     fechaDesde: '',
     fechaHasta: '',
     movimiento: '',
+    medicamento: '',
   });
   const [showDatePicker, setShowDatePicker] = useState(null);
   const [activeFiltersCount, setActiveFiltersCount] = useState(0);
 
   const isLoadingRef = useRef(false);
-
-  const formatDate = (dateString) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('es-ES', {
-      day: '2-digit',
-      month: '2-digit',
-      year: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
 
   const formatDateShort = (dateString) => {
     if (!dateString) return '';
@@ -88,6 +90,231 @@ export default function HistoryScreen() {
       year: '2-digit',
     });
   };
+
+  // Contar registros por tipo de movimiento
+  const getCountByMovimiento = (movimiento) => {
+    if (movimiento === 'todos') return filteredHistory.length;
+    return filteredHistory.filter((h) => h.movimiento === movimiento).length;
+  };
+
+  const obtenerDescriptorMedicamento = useCallback(
+    async (idMed) => {
+      if (!idMed)
+        return { descriptor: 'Medicamento eliminado', presentacion: '', nombre: '', existe: false };
+
+      if (medicamentosCache[idMed]) {
+        return medicamentosCache[idMed];
+      }
+
+      try {
+        const result = await pb.collection('medicamentos').getOne(idMed, {
+          requestKey: null,
+        });
+        const nombre = result.nombre || 'Desconocido';
+        const presentacion = result.presentacion || '';
+        //const descriptorCompleto = presentacion ? `${nombre} (${presentacion})` : nombre;
+        const descriptorCompleto = presentacion ? `${nombre} ( ${presentacion})` : nombre;
+        const medicamentoInfo = {
+          descriptor: descriptorCompleto,
+          presentacion: presentacion,
+          nombre: nombre,
+          existe: true,
+        };
+
+        setMedicamentosCache((prev) => ({ ...prev, [idMed]: medicamentoInfo }));
+        return medicamentoInfo;
+      } catch (error) {
+        let descriptor = 'Medicamento eliminado';
+        if (error.status === 404) {
+          descriptor = `Medicamento (ID: ${idMed?.substring(0, 8) || 'N/A'}...)`;
+        } else {
+          console.error('Error obteniendo medicamento:', error);
+        }
+
+        const medicamentoInfo = {
+          descriptor: descriptor,
+          presentacion: '',
+          nombre: '',
+          existe: false,
+        };
+
+        setMedicamentosCache((prev) => ({ ...prev, [idMed]: medicamentoInfo }));
+        return medicamentoInfo;
+      }
+    },
+    [medicamentosCache]
+  );
+
+  const processHistoryWithDescriptors = useCallback(
+    async (historyItems) => {
+      const promises = historyItems.map(async (item) => {
+        const medicamentoInfo = await obtenerDescriptorMedicamento(item.id_med);
+        return {
+          ...item,
+          descriptor: medicamentoInfo.descriptor,
+          presentacion: medicamentoInfo.presentacion,
+          nombreMed: medicamentoInfo.nombre,
+          medicamentoExiste: medicamentoInfo.existe,
+        };
+      });
+      return await Promise.all(promises);
+    },
+    [obtenerDescriptorMedicamento]
+  );
+
+  const actualizarFiltros = useCallback(async () => {
+    let filtered = [...history];
+
+    if (filterMovimiento !== 'todos') {
+      filtered = filtered.filter((h) => h.movimiento === filterMovimiento);
+    }
+
+    // ✅ FILTRO POR MEDICAMENTO (misma lógica)
+    if (filters.medicamento && filters.medicamento.trim()) {
+      const searchMed = filters.medicamento.trim();
+      const searchWords = searchMed.toLowerCase().split(/\s+/);
+
+      const wordFilters = searchWords.map((word) => {
+        return `(nombre ~ "${word}" || presentacion ~ "${word}")`;
+      });
+      const pocketBaseFilter = wordFilters.join(' && ');
+
+      try {
+        const medicamentosResult = await pb.collection('medicamentos').getList(1, 100, {
+          filter: pocketBaseFilter,
+          requestKey: null,
+        });
+
+        const idsMedicamentos = medicamentosResult.items.map((m) => m.id);
+
+        if (idsMedicamentos.length > 0) {
+          filtered = filtered.filter((h) => idsMedicamentos.includes(h.id_med));
+        } else {
+          filtered = [];
+        }
+      } catch (error) {
+        console.error('Error buscando medicamentos:', error);
+        filtered = [];
+      }
+    }
+
+    if (filters.fechaDesde) {
+      const desde = new Date(filters.fechaDesde);
+      desde.setHours(0, 0, 0, 0);
+      filtered = filtered.filter((h) => new Date(h.fecha) >= desde);
+    }
+
+    if (filters.fechaHasta) {
+      const hasta = new Date(filters.fechaHasta);
+      hasta.setHours(23, 59, 59, 999);
+      filtered = filtered.filter((h) => new Date(h.fecha) <= hasta);
+    }
+
+    setFilteredHistory(filtered);
+  }, [history, filterMovimiento, filters]);
+
+  // Reemplaza la función applySearch con esta versión mejorada:
+
+  const applySearch = useCallback(async () => {
+    // Si no hay término de búsqueda, aplicar filtros normales
+    if (!searchTerm.trim()) {
+      actualizarFiltros();
+      return;
+    }
+
+    setProcessing(true);
+
+    try {
+      const searchTermTrimmed = searchTerm.trim();
+      const searchWords = searchTermTrimmed.toLowerCase().split(/\s+/);
+
+      console.log(`🔍 Búsqueda: "${searchTermTrimmed}"`);
+      console.log(`   Palabras: ${searchWords.join(', ')}`);
+
+      // 1️⃣ Construir filtro para PocketBase (cada palabra como condición independiente)
+      // Ej: "Cap 500" -> (nombre ~ "Cap" || presentacion ~ "Cap") && (nombre ~ "500" || presentacion ~ "500")
+      const wordFilters = searchWords.map((word) => {
+        return `(nombre ~ "${word}" || presentacion ~ "${word}")`;
+      });
+      const pocketBaseFilter = wordFilters.join(' && ');
+
+      console.log(`   Filtro PocketBase: ${pocketBaseFilter}`);
+
+      // 2️⃣ Buscar medicamentos que coincidan con TODAS las palabras
+      let medicamentosEncontrados = [];
+      try {
+        const result = await pb.collection('medicamentos').getList(1, 100, {
+          filter: pocketBaseFilter,
+          requestKey: null,
+        });
+        medicamentosEncontrados = result.items;
+      } catch (filterError) {
+        console.error('Error en filtro PocketBase:', filterError);
+        // Si falla, buscar con filtro más simple
+        const simpleFilter = searchWords
+          .map((word) => `(nombre ~ "${word}" || presentacion ~ "${word}")`)
+          .join(' || ');
+        const result = await pb.collection('medicamentos').getList(1, 100, {
+          filter: simpleFilter,
+          requestKey: null,
+        });
+        medicamentosEncontrados = result.items;
+      }
+
+      const idsMedicamentos = medicamentosEncontrados.map((m) => m.id);
+
+      console.log(`📦 Medicamentos encontrados: ${medicamentosEncontrados.length}`);
+      medicamentosEncontrados.forEach((m) => {
+        console.log(`   - ${m.nombre} ${m.presentacion || ''}`);
+      });
+
+      // 3️⃣ Filtrar history localmente
+      let filtered = [...history];
+
+      // Filtro por tipo de movimiento
+      if (filterMovimiento !== 'todos') {
+        filtered = filtered.filter((h) => h.movimiento === filterMovimiento);
+      }
+
+      // Filtrar por IDs de medicamentos
+      if (idsMedicamentos.length > 0) {
+        filtered = filtered.filter((h) => idsMedicamentos.includes(h.id_med));
+      } else {
+        filtered = [];
+      }
+
+      // También buscar en el campo 'user' (para que el buscador encuentre por usuario)
+      const userMatches = history.filter((h) => {
+        const userNorm = normalizeText(h.user || '');
+        return searchWords.some((word) => userNorm.includes(word));
+      });
+
+      // Unir resultados
+      const combinedIds = new Set([...filtered.map((f) => f.id), ...userMatches.map((u) => u.id)]);
+      filtered = history.filter((h) => combinedIds.has(h.id));
+
+      // Aplicar filtros adicionales (fechas, etc.)
+      if (filters.fechaDesde) {
+        const desde = new Date(filters.fechaDesde);
+        desde.setHours(0, 0, 0, 0);
+        filtered = filtered.filter((h) => new Date(h.fecha) >= desde);
+      }
+
+      if (filters.fechaHasta) {
+        const hasta = new Date(filters.fechaHasta);
+        hasta.setHours(23, 59, 59, 999);
+        filtered = filtered.filter((h) => new Date(h.fecha) <= hasta);
+      }
+
+      setFilteredHistory(filtered);
+      console.log(`📊 Resultados finales: ${filtered.length}`);
+    } catch (error) {
+      console.error('Error en búsqueda:', error);
+      Alert.alert('Error', 'No se pudo realizar la búsqueda');
+    } finally {
+      setProcessing(false);
+    }
+  }, [history, filterMovimiento, searchTerm, filters]);
 
   const loadData = useCallback(
     async (isRefresh = false) => {
@@ -102,8 +329,12 @@ export default function HistoryScreen() {
           sort: '-fecha',
           requestKey: null,
         });
-        setHistory(result.items);
-        applyFilters(result.items, filters, searchTerm, filterMovimiento);
+
+        const processedItems = await processHistoryWithDescriptors(result.items);
+        setHistory(processedItems);
+
+        // Aplicar filtros después de cargar
+        await aplicarFiltrosCompletos();
       } catch (error) {
         if (!error.isAbort) {
           console.error('Error cargando history:', error);
@@ -115,43 +346,8 @@ export default function HistoryScreen() {
         setRefreshing(false);
       }
     },
-    [filters, searchTerm, filterMovimiento]
+    [filterMovimiento, filters, processHistoryWithDescriptors]
   );
-
-  const applyFilters = (data, currentFilters, search, movimientoFilter) => {
-    let filtered = [...data];
-
-    // Filtro por tipo de movimiento
-    if (movimientoFilter !== 'todos') {
-      filtered = filtered.filter((h) => h.movimiento === movimientoFilter);
-    }
-
-    // Filtro por término de búsqueda (id_med o user)
-    if (search.trim()) {
-      const term = search.toLowerCase().trim();
-      filtered = filtered.filter(
-        (h) =>
-          (h.id_med && h.id_med.toLowerCase().includes(term)) ||
-          (h.user && h.user.toLowerCase().includes(term))
-      );
-    }
-
-    // Filtro por fecha desde
-    if (currentFilters.fechaDesde) {
-      const desde = new Date(currentFilters.fechaDesde);
-      desde.setHours(0, 0, 0, 0);
-      filtered = filtered.filter((h) => new Date(h.fecha) >= desde);
-    }
-
-    // Filtro por fecha hasta
-    if (currentFilters.fechaHasta) {
-      const hasta = new Date(currentFilters.fechaHasta);
-      hasta.setHours(23, 59, 59, 999);
-      filtered = filtered.filter((h) => new Date(h.fecha) <= hasta);
-    }
-
-    setFilteredHistory(filtered);
-  };
 
   useFocusEffect(
     useCallback(() => {
@@ -164,8 +360,10 @@ export default function HistoryScreen() {
   }, []);
 
   useEffect(() => {
-    applyFilters(history, filters, searchTerm, filterMovimiento);
-  }, [searchTerm, filterMovimiento, filters]);
+    if (history.length > 0) {
+      actualizarFiltros();
+    }
+  }, [filterMovimiento, filters.fechaDesde, filters.fechaHasta, filters.medicamento]);
 
   const onRefresh = useCallback(() => loadData(true), [loadData]);
 
@@ -174,6 +372,7 @@ export default function HistoryScreen() {
     if (filtros.fechaDesde) count++;
     if (filtros.fechaHasta) count++;
     if (filtros.movimiento && filtros.movimiento !== 'todos') count++;
+    if (filtros.medicamento && filtros.medicamento.trim()) count++;
     setActiveFiltersCount(count);
   };
 
@@ -183,18 +382,80 @@ export default function HistoryScreen() {
   };
 
   const applyFiltersModal = () => {
+    // Guardar los filtros del modal
     setFilters({ ...tempFilters });
     updateActiveFiltersCount(tempFilters);
     setShowFilterModal(false);
+
+    // Aplicar filtros después de cerrar modal
+    aplicarFiltrosCompletos();
   };
 
+  const aplicarFiltrosCompletos = useCallback(async () => {
+    let filtered = [...history];
+
+    // Filtro por tipo de movimiento
+    if (filterMovimiento !== 'todos') {
+      filtered = filtered.filter((h) => h.movimiento === filterMovimiento);
+    }
+
+    // ✅ FILTRO POR MEDICAMENTO (con búsqueda flexible en PocketBase)
+    if (filters.medicamento && filters.medicamento.trim()) {
+      const searchMed = filters.medicamento.trim();
+      const searchWords = searchMed.toLowerCase().split(/\s+/);
+
+      // Construir filtro para PocketBase
+      const wordFilters = searchWords.map((word) => {
+        return `(nombre ~ "${word}" || presentacion ~ "${word}")`;
+      });
+      const pocketBaseFilter = wordFilters.join(' && ');
+
+      try {
+        // Buscar medicamentos que coincidan
+        const medicamentosResult = await pb.collection('medicamentos').getList(1, 100, {
+          filter: pocketBaseFilter,
+          requestKey: null,
+        });
+
+        const idsMedicamentos = medicamentosResult.items.map((m) => m.id);
+
+        if (idsMedicamentos.length > 0) {
+          filtered = filtered.filter((h) => idsMedicamentos.includes(h.id_med));
+        } else {
+          filtered = [];
+        }
+      } catch (error) {
+        console.error('Error buscando medicamentos:', error);
+        filtered = [];
+      }
+    }
+
+    // Filtro por fecha desde
+    if (filters.fechaDesde) {
+      const desde = new Date(filters.fechaDesde);
+      desde.setHours(0, 0, 0, 0);
+      filtered = filtered.filter((h) => new Date(h.fecha) >= desde);
+    }
+
+    // Filtro por fecha hasta
+    if (filters.fechaHasta) {
+      const hasta = new Date(filters.fechaHasta);
+      hasta.setHours(23, 59, 59, 999);
+      filtered = filtered.filter((h) => new Date(h.fecha) <= hasta);
+    }
+
+    setFilteredHistory(filtered);
+  }, [history, filterMovimiento, filters]);
+
   const clearFilters = () => {
-    const emptyFilters = { fechaDesde: '', fechaHasta: '', movimiento: '' };
+    const emptyFilters = { fechaDesde: '', fechaHasta: '', movimiento: '', medicamento: '' };
     setFilters(emptyFilters);
     setTempFilters(emptyFilters);
     setFilterMovimiento('todos');
+    setSearchTerm('');
     updateActiveFiltersCount(emptyFilters);
     setShowFilterModal(false);
+    setFilteredHistory(history);
   };
 
   const handleDateChange = (event, selectedDate, field) => {
@@ -229,12 +490,12 @@ export default function HistoryScreen() {
       filteredHistory.forEach((item, index) => {
         tableRows += `
           <tr style="background-color: ${index % 2 === 0 ? '#f9fafb' : 'white'}">
-            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${index + 1}</td>
-            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(formatDateShort(item.fecha))}</td>
-            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.id_med || '')}</td>
-            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.movimiento || '')}</td>
-            <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;">${escapeHtml(String(item.cantidad || ''))}</td>
-            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.user || '')}</td>
+            <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${index + 1}</td>
+            <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${escapeHtml(formatDateShort(item.fecha))}</td>
+            <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.descriptor || item.id_med || '')}</td>
+            <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.movimiento || '')}</td>
+            <td style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:center;">${escapeHtml(String(item.cantidad || ''))}</td>
+            <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.user || '')}</td>
           </tr>`;
       });
 
@@ -246,13 +507,13 @@ export default function HistoryScreen() {
           .title{font-size:20px;font-weight:bold;color:#1F2937;margin-bottom:5px}
           .subtitle{font-size:12px;color:#6B7280}
           .stats{margin-bottom:15px;padding:10px;background:#F3F4F6;border-radius:8px;text-align:center}
-          table{width:100%;border-collapse:collapse;font-size:11px}
-          th{background:#7C3AED;color:white;padding:8px;text-align:left;font-weight:bold}
+          table{width:100%;border-collapse:collapse;font-size:10px}
+          th{background:#7C3AED;color:white;padding:6px;text-align:left;font-weight:bold}
           .footer{margin-top:20px;padding-top:10px;text-align:center;font-size:10px;color:#9CA3AF;border-top:1px solid #E5E7EB}
         </style></head><body>
         <div class="header"><div class="title">HISTORIAL DE MOVIMIENTOS</div><div class="subtitle">Generado: ${today}</div></div>
         <div class="stats"><div class="stats-text">Total de registros: ${filteredHistory.length}</div></div>
-        <table><thead><tr><th>#</th><th>Fecha</th><th>ID Medicamento</th><th>Movimiento</th><th>Cantidad</th><th>Usuario/Destino</th></tr></thead>
+        <table><thead><tr><th>#</th><th>Fecha</th><th>Medicamento</th><th>Movimiento</th><th>Cantidad</th><th>Usuario/Destino</th></tr></thead>
         <tbody>${tableRows}</tbody></table>
         <div class="footer"><div>FarmaRincón - Sistema de Gestión de Inventario</div></div>
         </body></html>`;
@@ -312,119 +573,142 @@ export default function HistoryScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Header con título, filtro y PDF */}
       <View style={styles.header}>
         <History color="#7C3AED" size={28} />
         <Text style={styles.title}>Historial de Movimientos</Text>
-        <TouchableOpacity style={styles.filterButton} onPress={openFilterModal}>
-          <Filter color="#6B7280" size={22} />
-          {activeFiltersCount > 0 && (
-            <View style={styles.filterBadge}>
-              <Text style={styles.filterBadgeText}>{activeFiltersCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+          <TouchableOpacity
+            style={styles.pdfHeaderButton}
+            onPress={generatePDF}
+            disabled={generatingPDF}
+          >
+            <FileText color="#7C3AED" size={22} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.filterButton} onPress={openFilterModal}>
+            <Filter color="#6B7280" size={22} />
+            {activeFiltersCount > 0 && (
+              <View style={styles.filterBadge}>
+                <Text style={styles.filterBadgeText}>{activeFiltersCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Barra de búsqueda y filtros rápidos */}
+      {/* Barra de búsqueda con botón */}
       <View style={styles.searchSection}>
-        <View style={styles.searchContainer}>
-          <Search color="#9CA3AF" size={20} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Buscar por ID de medicamento o usuario..."
-            placeholderTextColor="#9CA3AF"
-            value={searchTerm}
-            onChangeText={setSearchTerm}
-          />
-          {searchTerm !== '' && (
-            <TouchableOpacity onPress={() => setSearchTerm('')}>
-              <X color="#9CA3AF" size={20} />
-            </TouchableOpacity>
-          )}
+        <View style={styles.searchRow}>
+          <View style={styles.searchContainer}>
+            <Search color="#9CA3AF" size={20} style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Buscar por medicamento o usuario..."
+              placeholderTextColor="#9CA3AF"
+              value={searchTerm}
+              onChangeText={setSearchTerm}
+              onSubmitEditing={applySearch}
+              returnKeyType="search"
+            />
+            {searchTerm !== '' && (
+              <TouchableOpacity onPress={() => setSearchTerm('')}>
+                <X color="#9CA3AF" size={20} />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity style={styles.searchButton} onPress={applySearch} disabled={processing}>
+            {processing ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Text style={styles.searchButtonText}>Buscar</Text>
+            )}
+          </TouchableOpacity>
         </View>
 
+        {/* Chips de filtro con contadores */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterChips}>
-          {['todos', 'Añadiendo', 'Entregando', 'Desactivando', 'Reactivando'].map((tipo) => (
-            <TouchableOpacity
-              key={tipo}
-              style={[styles.chip, filterMovimiento === tipo && styles.chipActive]}
-              onPress={() => setFilterMovimiento(tipo)}
-            >
-              <Text style={[styles.chipText, filterMovimiento === tipo && styles.chipTextActive]}>
-                {tipo === 'todos' ? 'Todos' : tipo}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {['todos', 'Añadiendo', 'Entregando', 'Desactivando', 'Reactivando'].map((tipo) => {
+            const count = getCountByMovimiento(tipo);
+            const label = tipo === 'todos' ? `Todos (${count})` : `${tipo} (${count})`;
+            return (
+              <TouchableOpacity
+                key={tipo}
+                style={[styles.chip, filterMovimiento === tipo && styles.chipActive]}
+                onPress={() => setFilterMovimiento(tipo)}
+              >
+                <Text style={[styles.chipText, filterMovimiento === tipo && styles.chipTextActive]}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
 
-      {/* Contador y botón PDF */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{filteredHistory.length}</Text>
-          <Text style={styles.statLabel}>Registros encontrados</Text>
-        </View>
-        <TouchableOpacity style={styles.pdfButton} onPress={generatePDF} disabled={generatingPDF}>
-          <FileText color="#7C3AED" size={18} />
-          <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Lista de movimientos */}
+      {/* Lista de movimientos (sin stats container) */}
       <ScrollView
         style={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        showsVerticalScrollIndicator={true}
       >
         {filteredHistory.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Package color="#D1D5DB" size={64} />
             <Text style={styles.emptyTitle}>No hay movimientos</Text>
-            <Text style={styles.emptyText}>
-              {searchTerm || filterMovimiento !== 'todos' || activeFiltersCount > 0
-                ? 'No hay resultados con esos filtros'
-                : 'Los movimientos aparecerán aquí'}
-            </Text>
+            <Text style={styles.emptyText}>No hay resultados con esos filtros</Text>
             {(searchTerm || filterMovimiento !== 'todos' || activeFiltersCount > 0) && (
-              <TouchableOpacity style={styles.clearAllButton} onPress={clearFilters}>
-                <Text style={styles.clearAllButtonText}>Limpiar filtros</Text>
+              <TouchableOpacity style={styles.clearAllButtonModalInline} onPress={clearFilters}>
+                <Text style={styles.clearAllButtonTextInline}>Limpiar filtros</Text>
               </TouchableOpacity>
             )}
           </View>
         ) : (
           filteredHistory.map((item) => (
-            <View key={item.id} style={styles.historyCard}>
-              <View style={styles.cardRow}>
-                <View style={styles.dateContainer}>
-                  <Clock color="#6B7280" size={14} />
-                  <Text style={styles.dateText}>{formatDateShort(item.fecha)}</Text>
-                </View>
+            <View key={item.id} style={styles.historyCardCompact}>
+              {/* Primera línea: TipoMov - Fecha - Usuario */}
+              <View style={styles.cardRowCompact}>
                 <View
                   style={[
-                    styles.movimientoBadge,
+                    styles.movimientoBadgeCompact,
                     { backgroundColor: getMovimientoColor(item.movimiento) + '20' },
                   ]}
                 >
                   <Text
-                    style={[styles.movimientoText, { color: getMovimientoColor(item.movimiento) }]}
+                    style={[
+                      styles.movimientoTextCompact,
+                      { color: getMovimientoColor(item.movimiento) },
+                    ]}
                   >
                     {getMovimientoIcon(item.movimiento)} {item.movimiento}
                   </Text>
                 </View>
+                <View style={styles.dateContainerCompact}>
+                  <Clock color="#6B7280" size={10} />
+                  <Text style={styles.dateTextCompact}>{formatDateShort(item.fecha)}</Text>
+                </View>
+                <View style={styles.userContainerCompact}>
+                  <User color="#6B7280" size={10} />
+                  <Text style={styles.userTextCompact} numberOfLines={1}>
+                    {item.user || 'Desconocido'}
+                  </Text>
+                </View>
               </View>
-              <View style={styles.cardRow}>
-                <Text style={styles.idMedText}>ID: {item.id_med || 'N/A'}</Text>
-                <Text style={styles.cantidadText}>Cant: {item.cantidad}</Text>
-              </View>
-              <View style={styles.cardRow}>
-                <User size={12} color="#6B7280" />
-                <Text style={styles.userText}>{item.user || 'Desconocido'}</Text>
+              {/* Segunda línea: Descriptor - Cantidad */}
+              <View style={styles.cardRowCompact}>
+                <View style={styles.medicamentoContainerCompact}>
+                  <Pill color="#7C3AED" size={10} />
+                  <Text style={styles.medicamentoTextCompact} numberOfLines={1}>
+                    {item.descriptor || item.id_med || 'N/A'}
+                  </Text>
+                </View>
+                <Text style={styles.cantidadTextCompact}>Cant: {item.cantidad}</Text>
               </View>
             </View>
           ))
         )}
       </ScrollView>
 
-      {/* Modal de filtros */}
+      {/* Modales sin cambios */}
       <Modal visible={showFilterModal} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingScrollView style={styles.modalContent}>
@@ -457,6 +741,15 @@ export default function HistoryScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
+
+              <Text style={styles.filterLabel}>Medicamento</Text>
+              <TextInput
+                style={styles.filterInput}
+                placeholder="Ej: Paracetamol 500mg"
+                placeholderTextColor="#9CA3AF"
+                value={tempFilters.medicamento}
+                onChangeText={(text) => setTempFilters((prev) => ({ ...prev, medicamento: text }))}
+              />
 
               <Text style={styles.filterLabel}>Fecha de movimiento</Text>
               <View style={styles.dateRangeContainer}>
@@ -521,6 +814,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
   loadingText: { marginTop: 10, fontSize: 14, color: '#6B7280' },
+
+  // Header con botones
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -531,6 +826,14 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E5E7EB',
   },
   title: { fontSize: 22, fontWeight: 'bold', color: '#1F2937', flex: 1, marginLeft: 10 },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  pdfHeaderButton: {
+    padding: 8,
+  },
   filterButton: { padding: 8, position: 'relative' },
   filterBadge: {
     position: 'absolute',
@@ -545,16 +848,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   filterBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
+
+  // Búsqueda
   searchSection: { backgroundColor: 'white', padding: 16, paddingBottom: 8 },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  searchIcon: { marginRight: 8 },
   searchContainer: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F3F4F6',
     borderRadius: 10,
     paddingHorizontal: 12,
-    marginBottom: 12,
   },
   searchInput: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#1F2937' },
+  searchButton: {
+    backgroundColor: '#7C3AED',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchButtonText: { color: 'white', fontWeight: '600', fontSize: 14 },
+
+  // Chips con contadores
   filterChips: { flexDirection: 'row', marginBottom: 4 },
   chip: {
     paddingHorizontal: 16,
@@ -566,60 +884,90 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: '#7C3AED' },
   chipText: { color: '#4B5563', fontSize: 13 },
   chipTextActive: { color: 'white' },
-  statsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    gap: 12,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: 'white',
-    padding: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  statNumber: { fontSize: 20, fontWeight: 'bold', color: '#7C3AED' },
-  statLabel: { fontSize: 11, color: '#6B7280', marginTop: 4 },
-  pdfButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EDE9FE',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 12,
-    gap: 6,
-  },
-  pdfButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 12 },
-  content: { flex: 1, padding: 16 },
+
+  // Contenido más arriba
+  content: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+
+  // Empty state
   emptyContainer: { alignItems: 'center', paddingVertical: 40 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
   emptyText: { fontSize: 14, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
-  clearAllButton: { marginTop: 16, padding: 12, backgroundColor: '#7C3AED', borderRadius: 8 },
-  clearAllButtonText: { color: 'white', fontWeight: '600' },
-  historyCard: {
-    backgroundColor: 'white',
-    marginBottom: 10,
+  clearAllButtonModalInline: {
+    marginTop: 16,
     padding: 12,
-    borderRadius: 12,
-    elevation: 1,
-    borderLeftWidth: 3,
+    backgroundColor: '#7C3AED',
+    borderRadius: 8,
+  },
+  clearAllButtonTextInline: { color: 'white', fontWeight: '600' },
+
+  // Cards compactas
+  historyCardCompact: {
+    backgroundColor: 'white',
+    marginBottom: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    elevation: 0.5,
+    borderLeftWidth: 2,
     borderLeftColor: '#7C3AED',
   },
-  cardRow: {
+  cardRowCompact: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
+    flexWrap: 'wrap',
+    marginBottom: 2,
   },
-  dateContainer: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  dateText: { fontSize: 12, color: '#6B7280' },
-  movimientoBadge: { paddingHorizontal: 10, paddingVertical: 2, borderRadius: 12 },
-  movimientoText: { fontSize: 11, fontWeight: '600' },
-  idMedText: { fontSize: 13, fontWeight: '500', color: '#1F2937' },
-  cantidadText: { fontSize: 13, fontWeight: 'bold', color: '#7C3AED' },
-  userText: { fontSize: 11, color: '#6B7280', marginLeft: 4, flex: 1 },
+  movimientoBadgeCompact: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    marginRight: 8,
+  },
+  movimientoTextCompact: {
+    fontSize: 8,
+    fontWeight: '600',
+  },
+  dateContainerCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 12,
+    gap: 3,
+  },
+  dateTextCompact: {
+    fontSize: 8,
+    color: '#6B7280',
+  },
+  userContainerCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    flex: 1,
+  },
+  userTextCompact: {
+    fontSize: 8,
+    color: '#6B7280',
+    flex: 1,
+  },
+  medicamentoContainerCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flex: 1,
+  },
+  medicamentoTextCompact: {
+    fontSize: 8,
+    fontWeight: '500',
+    color: '#1F2937',
+    flex: 1,
+  },
+  cantidadTextCompact: {
+    fontSize: 8,
+    fontWeight: 'bold',
+    color: '#7C3AED',
+    marginLeft: 8,
+  },
+
+  // Modales
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -644,6 +992,16 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
   filterForm: { padding: 20 },
   filterLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
+  filterInput: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 14,
+    marginBottom: 20,
+    color: '#1F2937',
+  },
   movimientoOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
   optionChip: {
     paddingHorizontal: 16,
@@ -684,6 +1042,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
+  clearAllButtonText: { color: '#4B5563', fontWeight: '600' },
   applyButton: {
     flex: 1,
     backgroundColor: '#7C3AED',

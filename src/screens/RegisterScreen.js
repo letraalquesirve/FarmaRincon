@@ -10,16 +10,17 @@ import {
   Alert,
   Image,
   ActivityIndicator,
+  Platform,
   Modal,
 } from 'react-native';
-// ✅ SafeAreaView corregido
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
+import { Audio } from 'expo-av';
 import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File, Directory, Paths } from 'expo-file-system';
 import {
   Camera as CameraIcon,
   Image as ImageIcon,
@@ -30,7 +31,6 @@ import {
   Plus,
   Sparkles,
   Mic,
-  MicOff,
   Upload,
   Play,
   StopCircle,
@@ -61,7 +61,7 @@ export default function RegisterScreen({ user }) {
     vencimiento: '',
     ubicacion: '',
   });
-  const [manualModalVisible, setManualModalVisible] = useState(false); // ✅ importante
+  const [manualModalVisible, setManualModalVisible] = useState(false);
   const [manualFormData, setManualFormData] = useState({
     nombre: '',
     presentacion: '',
@@ -76,11 +76,11 @@ export default function RegisterScreen({ user }) {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
 
-  // ==================== ESTADOS PARA AUDIO ====================
+  // ==================== ESTADOS PARA AUDIO (solo expo-av) ====================
   const [audioUri, setAudioUri] = useState(null);
   const [audioBase64, setAudioBase64] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [recordingRef, setRecordingRef] = useState(null);
+  const [recording, setRecording] = useState(null);
   const [sound, setSound] = useState(null);
   const [processingAudio, setProcessingAudio] = useState(false);
   const [audioFileInfo, setAudioFileInfo] = useState(null);
@@ -114,6 +114,26 @@ export default function RegisterScreen({ user }) {
     cargarUltimoMedicamento();
   }, []);
 
+  // Limpiar grabación al cerrar el modal
+  useEffect(() => {
+    if (!manualModalVisible && recording) {
+      const cleanup = async () => {
+        try {
+          if (recording) {
+            await recording.stopAndUnloadAsync();
+            setRecording(null);
+          }
+          setIsRecording(false);
+          setAudioUri(null);
+          setAudioBase64(null);
+        } catch (e) {
+          console.log('Error limpiando grabación:', e);
+        }
+      };
+      cleanup();
+    }
+  }, [manualModalVisible]);
+
   // ==================== FUNCIONES DE UTILIDAD ====================
   const getUserName = () => user?.nombre || 'usuario';
 
@@ -134,7 +154,7 @@ export default function RegisterScreen({ user }) {
     }
   };
 
-  const registrarHistory = async (idMed, fecha, user, movimiento, cantidad) => {
+  const registrarHistory = async (idMed, fecha, user, movimiento, cantidad, nombreMed = '') => {
     try {
       await pb.collection('history').create({
         id_med: idMed,
@@ -190,72 +210,112 @@ export default function RegisterScreen({ user }) {
     }
   };
 
-  // ==================== FUNCIONES DE AUDIO (expo-audio) ====================
+  // ==================== FUNCIONES DE AUDIO (solo expo-av) ====================
   const setupAudio = async () => {
-    const status = await AudioModule.requestRecordingPermissionsAsync();
-    if (!status.granted) {
+    const { status } = await Audio.requestPermissionsAsync();
+    if (status !== 'granted') {
       Alert.alert('Permiso denegado', 'Se necesita acceso al micrófono para grabar audio');
       return false;
     }
-    await setAudioModeAsync({
-      playsInSilentMode: true,
-      allowsRecording: true,
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
     });
     return true;
   };
 
+  // Elimina la importación antigua
+  // import * as FileSystem from 'expo-file-system';
+
+  // Usa la nueva API con importación nombrada
+
+  // ==================== FUNCIONES DE AUDIO CORREGIDAS ====================
+
   const uriToBase64 = async (uri) => {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result.split(',')[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+    try {
+      const file = new File(uri);
+
+      // Esperar a que el archivo exista
+      let exists = false;
+      let attempts = 0;
+      while (!exists && attempts < 30) {
+        exists = file.exists;
+        if (!exists) {
+          await new Promise((r) => setTimeout(r, 100));
+          attempts++;
+        }
+      }
+
+      if (!exists) {
+        throw new Error('El archivo no existe');
+      }
+
+      return file.base64Sync();
+    } catch (error) {
+      console.error('Error en uriToBase64:', error);
+      throw error;
+    }
   };
 
   const startRecording = async () => {
+    if (isRecording || recording) return;
+
     const hasPermissions = await setupAudio();
     if (!hasPermissions) return;
 
     try {
-      const recorder = await AudioModule.createRecorder(RecordingPresets.HIGH_QUALITY);
-      setRecordingRef(recorder);
-      await recorder.prepareToRecordAsync();
-      await recorder.record();
+      const { recording: newRecording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setRecording(newRecording);
       setIsRecording(true);
       console.log('🎙️ Grabación iniciada');
     } catch (err) {
       console.error('Error al grabar:', err);
-      Alert.alert('Error', 'No se pudo iniciar la grabación');
+      Alert.alert('Error', 'No se pudo iniciar la grabación: ' + err.message);
     }
   };
 
   const stopRecording = async () => {
-    if (!recordingRef) return;
+    if (!recording) return;
 
     try {
       setIsRecording(false);
-      await recordingRef.stop();
-      const uri = recordingRef.getURI();
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      console.log('URI obtenida:', uri);
       setAudioUri(uri);
+
+      // Convertir a base64 usando la nueva API
       const base64 = await uriToBase64(uri);
-      setAudioBase64(base64);
-      setAudioFileInfo({
-        uri: uri,
-        name: `recording_${Date.now()}.mp3`,
-        type: 'audio/mpeg',
-      });
-      console.log('✅ Grabación detenida, archivo en:', uri);
-      // Reproducir automáticamente
-      const { sound: newSound } = await AudioModule.Sound.createAsync({ uri });
-      setSound(newSound);
-      await newSound.playAsync();
+      if (base64) {
+        setAudioBase64(base64);
+        setAudioFileInfo({
+          uri: uri,
+          name: `recording_${Date.now()}.m4a`,
+          type: 'audio/m4a',
+        });
+        console.log('✅ Grabación detenida, tamaño base64:', base64.length);
+
+        // Reproducir automáticamente (usando Audio de expo-av)
+        try {
+          const { sound: newSound } = await Audio.Sound.createAsync({ uri });
+          setSound(newSound);
+          await newSound.playAsync();
+        } catch (playError) {
+          console.log('No se pudo reproducir automáticamente:', playError);
+        }
+      } else {
+        throw new Error('No se pudo convertir el audio a base64');
+      }
     } catch (err) {
       console.error('Error al detener grabación:', err);
+      Alert.alert('Error', 'No se pudo procesar el audio: ' + err.message);
     } finally {
-      setRecordingRef(null);
+      setRecording(null);
     }
   };
 
@@ -273,11 +333,16 @@ export default function RegisterScreen({ user }) {
         name: asset.name,
         type: asset.mimeType,
       });
+
       const base64 = await uriToBase64(asset.uri);
-      setAudioBase64(base64);
-      const { sound: newSound } = await AudioModule.Sound.createAsync({ uri: asset.uri });
-      setSound(newSound);
-      await newSound.playAsync();
+      if (base64) {
+        setAudioBase64(base64);
+        const { sound: newSound } = await Audio.Sound.createAsync({ uri: asset.uri });
+        setSound(newSound);
+        await newSound.playAsync();
+      } else {
+        Alert.alert('Error', 'No se pudo leer el archivo de audio');
+      }
     } catch (err) {
       console.error('Error seleccionando audio:', err);
       Alert.alert('Error', 'No se pudo seleccionar el archivo');
@@ -289,12 +354,17 @@ export default function RegisterScreen({ user }) {
       Alert.alert('Sin audio', 'No hay audio grabado o seleccionado');
       return;
     }
-    if (sound) {
-      await sound.replayAsync();
-    } else {
-      const { sound: newSound } = await AudioModule.Sound.createAsync({ uri: audioUri });
-      setSound(newSound);
-      await newSound.playAsync();
+    try {
+      if (sound) {
+        await sound.replayAsync();
+      } else {
+        const { sound: newSound } = await Audio.Sound.createAsync({ uri: audioUri });
+        setSound(newSound);
+        await newSound.playAsync();
+      }
+    } catch (err) {
+      console.error('Error reproduciendo audio:', err);
+      Alert.alert('Error', 'No se pudo reproducir el audio');
     }
   };
 
@@ -319,13 +389,15 @@ El JSON debe tener esta estructura exacta:
 {
   "nombre": "nombre del medicamento",
   "presentacion": "presentación (ej: tabletas 500mg, jeringa, solución, etc.)",
-  "categoria": "categoría farmacológica (ej: Analgésico, Antibiótico, Antiinflamatorio, Antihipertensivo, etc.),
+  "categoria": "categoría farmacológica (ej: Analgésico, Antibiótico, Antiinflamatorio, Antihipertensivo, etc.)",
   "cantidad": "número de unidades o cantidad (ej: 300 tabletas, 10 ml, 30 cápsulas)",
   "vencimiento": "fecha de vencimiento en formato YYYY-MM-DD (si se menciona, si no, cadena vacía)"
 }
 Si no dictan día, asume el día 01 de ese mes.
 La categoría no será dictada. Debes buscarla tú en la web dado el medicamento detectado.
 Si no entiendes algún campo, déjalo como cadena vacía.`;
+
+      console.log('📤 Enviando solicitud a Gemini...');
 
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
@@ -346,17 +418,26 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
         }
       );
 
+      console.log('📥 Status code:', response.status);
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`${response.status}: ${errorData.error?.message}`);
+        const textResponse = await response.text();
+        console.error('❌ Error response body:', textResponse);
+        throw new Error(`HTTP ${response.status}: ${textResponse.substring(0, 200)}`);
       }
 
       const data = await response.json();
+      console.log('✅ Respuesta recibida:', JSON.stringify(data, null, 2));
+
       let jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      console.log('📝 Texto extraído:', jsonText);
+
+      // Limpiar marcadores de código
       jsonText = jsonText
         .replace(/```json\n?/g, '')
         .replace(/```\n?/g, '')
         .trim();
+
       const parsed = JSON.parse(jsonText);
 
       setManualFormData((prev) => ({
@@ -370,8 +451,8 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
 
       Alert.alert('Éxito', 'Audio procesado correctamente. Los campos se han rellenado.');
     } catch (error) {
-      console.error('Error en procesamiento de audio:', error);
-      Alert.alert('Error', 'No se pudo procesar el audio: ' + error.message);
+      console.error('❌ Error en procesamiento de audio:', error);
+      Alert.alert('Error', 'REVISE EL VPN. No se pudo procesar el audio: ' + error.message);
     } finally {
       setProcessingAudio(false);
     }
@@ -553,7 +634,8 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
         new Date().toISOString(),
         userName,
         'Añadiendo',
-        parseInt(medData.cantidad)
+        parseInt(medData.cantidad),
+        medData.nombre
       );
       await cargarUltimoMedicamento();
       Alert.alert('Éxito', 'Medicamento registrado correctamente', [
@@ -588,47 +670,56 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
         const ubicacionDesdeCategoria = await obtenerUbicacionDesdeCategoria(
           manualFormData.categoria
         );
-        if (ubicacionDesdeCategoria) ubicacionFinal = ubicacionDesdeCategoria;
+        if (ubicacionDesdeCategoria) {
+          ubicacionFinal = ubicacionDesdeCategoria;
+          setManualFormData((prev) => ({ ...prev, ubicacion: ubicacionFinal }));
+        }
       }
 
-      const formDataToSend = new FormData();
-      formDataToSend.append('nombre', manualFormData.nombre.trim());
-      formDataToSend.append(
-        'presentacion',
-        manualFormData.presentacion?.trim() || 'No especificada'
-      );
-      formDataToSend.append('categoria', manualFormData.categoria?.trim() || 'Sin categoría');
-      formDataToSend.append('cantidad', parseInt(manualFormData.cantidad));
-      formDataToSend.append('vencimiento', manualFormData.vencimiento);
-      formDataToSend.append('ubicacion', ubicacionFinal);
-      formDataToSend.append('activo', 'true');
-      formDataToSend.append('userid', userName);
-      formDataToSend.append('username', userName);
-      formDataToSend.append('fecharegistro', new Date().toISOString());
+      // Preparar los datos del medicamento
+      const medicamentoData = {
+        nombre: manualFormData.nombre.trim(),
+        presentacion: manualFormData.presentacion?.trim() || 'No especificada',
+        categoria: manualFormData.categoria?.trim() || 'Sin categoría',
+        cantidad: parseInt(manualFormData.cantidad),
+        vencimiento: manualFormData.vencimiento,
+        ubicacion: ubicacionFinal,
+        activo: true,
+        userid: userName,
+        username: userName,
+        fecharegistro: new Date().toISOString(),
+      };
 
+      // Agregar imagen si existe (como base64)
       if (imagenFinal) {
-        const blob = await (await fetch(`data:image/jpeg;base64,${imagenFinal}`)).blob();
-        formDataToSend.append('imagen', blob, 'medicamento.jpg');
+        medicamentoData.imagen = imagenFinal;
       }
 
-      if (audioFileInfo) {
-        const audioBlob = await (await fetch(audioFileInfo.uri)).blob();
-        formDataToSend.append('audio', audioBlob, audioFileInfo.name);
+      // Agregar audio si existe (como base64 en campo JSON)
+      if (audioBase64) {
+        medicamentoData.audio = audioBase64; // Guardar el base64 directamente
+        console.log('🎵 Audio agregado al medicamento, tamaño:', audioBase64.length);
       }
 
-      const result = await pb.collection('medicamentos').create(formDataToSend);
+      // Crear el medicamento con todos los datos (incluyendo audio)
+      const result = await pb.collection('medicamentos').create(medicamentoData);
+      console.log('✅ Medicamento creado, ID:', result.id);
 
+      // Registrar en history
       await registrarHistory(
         result.id,
         new Date().toISOString(),
         userName,
         'Añadiendo',
-        parseInt(manualFormData.cantidad)
+        parseInt(manualFormData.cantidad),
+        manualFormData.nombre
       );
+
       await cargarUltimoMedicamento();
 
       Alert.alert('Éxito', 'Medicamento registrado correctamente');
 
+      // Limpiar formulario
       setManualFormData({
         nombre: '',
         presentacion: '',
@@ -768,7 +859,7 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
               {
                 parts: [
                   {
-                    text: `Cuál es la categoría farmacológica de "${nombreMedicamento}"? Responde SOLO con una palabra de la lista: Analgésico, Antibiótico, Antiinflamatorio, etc.`,
+                    text: `Cuál es la categoría farmacológica de "${nombreMedicamento}"? Responde SOLO con una palabra de la lista: Analgésico, Antibiótico, Antiinflamatorio, Antihipertensivo, Antidiabético, Antihistamínico, Antidepresivo, Ansiolítico, Anticonvulsivante, Anticoagulante, Broncodilatador, Corticosteroide, Diurético, Laxante, Otros.`,
                   },
                 ],
               },
@@ -785,8 +876,20 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
       const data = await response.json();
       let categoria = 'Otros';
       if (data.candidates?.[0]) categoria = data.candidates[0].content.parts[0].text.trim();
-      if (esManual) setManualFormData((prev) => ({ ...prev, categoria }));
-      else setFormData((prev) => ({ ...prev, categoria }));
+      if (categoria.length > 30) categoria = 'Otros';
+      if (esManual) {
+        setManualFormData((prev) => ({ ...prev, categoria }));
+        const ubicacion = await obtenerUbicacionDesdeCategoria(categoria);
+        if (ubicacion) {
+          setManualFormData((prev) => ({ ...prev, ubicacion }));
+        }
+      } else {
+        setFormData((prev) => ({ ...prev, categoria }));
+        const ubicacion = await obtenerUbicacionDesdeCategoria(categoria);
+        if (ubicacion) {
+          setFormData((prev) => ({ ...prev, ubicacion }));
+        }
+      }
       Alert.alert('Categoría sugerida', `"${categoria}"`);
     } catch (error) {
       if (intento < 3) {
@@ -826,110 +929,6 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
           </TouchableOpacity>
         </View>
       </SafeAreaView>
-    );
-  }
-
-  if (step === 'capture') {
-    return (
-      <ScrollView style={styles.container}>
-        <View style={styles.header}>
-          <Package color="#7C3AED" size={28} />
-          <Text style={styles.title}>Registrar Medicamento</Text>
-          <View style={{ width: 28 }} />
-        </View>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>¿Cómo quieres obtener la información?</Text>
-          <View style={styles.cameraOptions}>
-            <TouchableOpacity
-              style={styles.cameraOption}
-              onPress={() => {
-                if (!permission.granted) requestPermission();
-                else setStep('camera');
-              }}
-            >
-              <CameraIcon color="#7C3AED" size={32} />
-              <Text style={styles.cameraOptionText}>Tomar foto</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.cameraOption} onPress={pickImage}>
-              <ImageIcon color="#7C3AED" size={32} />
-              <Text style={styles.cameraOptionText}>Galería</Text>
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity style={styles.manualButton} onPress={() => setManualModalVisible(true)}>
-            <Text style={styles.manualButtonText}>📝 MANUAL SIN IA</Text>
-          </TouchableOpacity>
-        </View>
-        {imageUri && (
-          <View style={styles.previewContainer}>
-            {(processing || comprimiendo) && (
-              <View style={styles.processingOverlay}>
-                <ActivityIndicator color="white" size="large" />
-                <Text style={styles.processingText}>
-                  {comprimiendo ? 'Comprimiendo imagen...' : 'Analizando imagen...'}
-                </Text>
-              </View>
-            )}
-            <Image source={{ uri: imageUri }} style={styles.previewImage} />
-            <TouchableOpacity
-              style={styles.clearImage}
-              onPress={() => {
-                setImageUri(null);
-                setImageBase64(null);
-                imageBase64Ref.current = null;
-                setProcessing(false);
-                setComprimiendo(false);
-              }}
-            >
-              <X color="white" size={16} />
-            </TouchableOpacity>
-          </View>
-        )}
-        {ultimoMedicamento && (
-          <View style={styles.ultimoMedicamentoSection}>
-            <Text style={styles.ultimoMedicamentoTitle}>📋 ÚLTIMO MEDICAMENTO REGISTRADO</Text>
-            <View style={[styles.ultimoCard, getStatusColor(ultimoMedicamento.vencimiento)]}>
-              <View style={styles.ultimoCardHeader}>
-                <View style={styles.ultimoInfo}>
-                  <Text style={styles.ultimoNombre}>{ultimoMedicamento.nombre}</Text>
-                  <Text style={styles.ultimoPresentation}>{ultimoMedicamento.presentacion}</Text>
-                  <Text style={styles.ultimoCategory}>📋 {ultimoMedicamento.categoria}</Text>
-                  {ultimoMedicamento.ubicacion && (
-                    <Text style={styles.ultimoUbicacion}>📍 {ultimoMedicamento.ubicacion}</Text>
-                  )}
-                  <Text style={styles.ultimoUser}>
-                    👤 Registrado por: {ultimoMedicamento.username || 'usuario'}
-                  </Text>
-                </View>
-                {ultimoMedicamento.imagen && (
-                  <Image
-                    source={{ uri: `data:image/jpeg;base64,${ultimoMedicamento.imagen}` }}
-                    style={styles.ultimoImage}
-                  />
-                )}
-              </View>
-              <View style={styles.ultimoDetails}>
-                <View style={styles.ultimoRow}>
-                  <Text style={styles.ultimoLabel}>Cantidad:</Text>
-                  <Text style={styles.ultimoValue}>{ultimoMedicamento.cantidad} uds</Text>
-                </View>
-                <View style={styles.ultimoRow}>
-                  <Text style={styles.ultimoLabel}>Vencimiento:</Text>
-                  <Text style={styles.ultimoValue}>
-                    {new Date(ultimoMedicamento.vencimiento).toLocaleDateString()}
-                  </Text>
-                </View>
-                <View style={styles.ultimoStatus}>
-                  <View style={[styles.ultimoBadge, getStatusColor(ultimoMedicamento.vencimiento)]}>
-                    <Text style={styles.ultimoStatusText}>
-                      {getStatusText(ultimoMedicamento.vencimiento)}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-          </View>
-        )}
-      </ScrollView>
     );
   }
 
@@ -1046,159 +1045,275 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
     );
   }
 
-  // ==================== MODAL MANUAL CON AUDIO ====================
+  // ==================== CAPTURE PRINCIPAL CON MODAL ====================
   return (
-    <Modal visible={manualModalVisible} animationType="slide" transparent={true}>
-      <View style={styles.modalOverlay}>
-        <KeyboardAvoidingScrollView style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Registrar Medicamento (Manual)</Text>
-            <TouchableOpacity onPress={() => setManualModalVisible(false)}>
-              <X color="#6B7280" size={24} />
+    <>
+      <ScrollView style={styles.container}>
+        <View style={styles.header}>
+          <Package color="#7C3AED" size={28} />
+          <Text style={styles.title}>Registrar Medicamento</Text>
+          <View style={{ width: 28 }} />
+        </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>¿Cómo quieres obtener la información?</Text>
+          <View style={styles.cameraOptions}>
+            <TouchableOpacity
+              style={styles.cameraOption}
+              onPress={() => {
+                if (!permission.granted) requestPermission();
+                else setStep('camera');
+              }}
+            >
+              <CameraIcon color="#7C3AED" size={32} />
+              <Text style={styles.cameraOptionText}>Tomar foto</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cameraOption} onPress={pickImage}>
+              <ImageIcon color="#7C3AED" size={32} />
+              <Text style={styles.cameraOptionText}>Galería</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.modalBody}>
-            <Text style={[styles.label, { marginTop: 0 }]}>🎤 Dictado por Audio</Text>
-            <View style={styles.audioControls}>
-              {!isRecording ? (
-                <TouchableOpacity style={styles.audioButtonRecord} onPress={startRecording}>
-                  <Mic size={24} color="white" />
-                  <Text style={styles.audioButtonText}>Grabar</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={styles.audioButtonStop} onPress={stopRecording}>
-                  <StopCircle size={24} color="white" />
-                  <Text style={styles.audioButtonText}>Detener</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={styles.audioButtonSubir} onPress={pickAudioFile}>
-                <Upload size={24} color="white" />
-                <Text style={styles.audioButtonText}>Subir</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.audioButtonPlay}
-                onPress={playAudio}
-                disabled={!audioUri}
-              >
-                <Play size={24} color="white" />
-                <Text style={styles.audioButtonText}>Reproducir</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.audioButtonProcesar,
-                  (!audioUri || processingAudio) && styles.audioButtonDisabled,
-                ]}
-                onPress={processAudioWithAI}
-                disabled={!audioUri || processingAudio}
-              >
-                {processingAudio ? (
-                  <ActivityIndicator size="small" color="white" />
-                ) : (
-                  <>
-                    <Sparkles size={20} color="white" />
-                    <Text style={styles.audioButtonText}>Procesar con IA</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-            {audioUri && !processingAudio && (
-              <Text style={styles.audioInfo}>Audio listo para procesar</Text>
+          <TouchableOpacity style={styles.manualButton} onPress={() => setManualModalVisible(true)}>
+            <Text style={styles.manualButtonText}>📝 MANUAL CON AUDIO-IA</Text>
+          </TouchableOpacity>
+        </View>
+        {imageUri && (
+          <View style={styles.previewContainer}>
+            {(processing || comprimiendo) && (
+              <View style={styles.processingOverlay}>
+                <ActivityIndicator color="white" size="large" />
+                <Text style={styles.processingText}>
+                  {comprimiendo ? 'Comprimiendo imagen...' : 'Analizando imagen...'}
+                </Text>
+              </View>
             )}
+            <Image source={{ uri: imageUri }} style={styles.previewImage} />
+            <TouchableOpacity
+              style={styles.clearImage}
+              onPress={() => {
+                setImageUri(null);
+                setImageBase64(null);
+                imageBase64Ref.current = null;
+                setProcessing(false);
+                setComprimiendo(false);
+              }}
+            >
+              <X color="white" size={16} />
+            </TouchableOpacity>
+          </View>
+        )}
+        {ultimoMedicamento && (
+          <View style={styles.ultimoMedicamentoSection}>
+            <Text style={styles.ultimoMedicamentoTitle}>📋 ÚLTIMO MEDICAMENTO REGISTRADO</Text>
+            <View style={[styles.ultimoCard, getStatusColor(ultimoMedicamento.vencimiento)]}>
+              <View style={styles.ultimoCardHeader}>
+                <View style={styles.ultimoInfo}>
+                  <Text style={styles.ultimoNombre}>{ultimoMedicamento.nombre}</Text>
+                  <Text style={styles.ultimoPresentation}>{ultimoMedicamento.presentacion}</Text>
+                  <Text style={styles.ultimoCategory}>📋 {ultimoMedicamento.categoria}</Text>
+                  {ultimoMedicamento.ubicacion && (
+                    <Text style={styles.ultimoUbicacion}>📍 {ultimoMedicamento.ubicacion}</Text>
+                  )}
+                  <Text style={styles.ultimoUser}>
+                    👤 Registrado por: {ultimoMedicamento.username || 'usuario'}
+                  </Text>
+                </View>
+                {ultimoMedicamento.imagen && (
+                  <Image
+                    source={{ uri: `data:image/jpeg;base64,${ultimoMedicamento.imagen}` }}
+                    style={styles.ultimoImage}
+                  />
+                )}
+              </View>
+              <View style={styles.ultimoDetails}>
+                <View style={styles.ultimoRow}>
+                  <Text style={styles.ultimoLabel}>Cantidad:</Text>
+                  <Text style={styles.ultimoValue}>{ultimoMedicamento.cantidad} uds</Text>
+                </View>
+                <View style={styles.ultimoRow}>
+                  <Text style={styles.ultimoLabel}>Vencimiento:</Text>
+                  <Text style={styles.ultimoValue}>
+                    {new Date(ultimoMedicamento.vencimiento).toLocaleDateString()}
+                  </Text>
+                </View>
+                <View style={styles.ultimoStatus}>
+                  <View style={[styles.ultimoBadge, getStatusColor(ultimoMedicamento.vencimiento)]}>
+                    <Text style={styles.ultimoStatusText}>
+                      {getStatusText(ultimoMedicamento.vencimiento)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+          </View>
+        )}
+      </ScrollView>
 
-            <Text style={styles.label}>Nombre del medicamento *</Text>
-            <View style={styles.rowConBoton}>
-              <View style={styles.nombreInputContainer}>
+      {/* MODAL MANUAL CON AUDIO */}
+      <Modal
+        visible={manualModalVisible}
+        animationType="slide"
+        transparent={true}
+        statusBarTranslucent={true}
+        hardwareAccelerated={true} // ← Agrega esto
+        presentationStyle="overFullScreen" // ← Agrega esto para Android
+        onRequestClose={() => setManualModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <ScrollView>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Registrar Medicamento (Manual)</Text>
+                <TouchableOpacity onPress={() => setManualModalVisible(false)}>
+                  <X color="#6B7280" size={24} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.modalBody}>
+                <Text style={[styles.label, { marginTop: 0 }]}>🎤 Dictado por Audio</Text>
+                <View style={styles.audioControls}>
+                  {!isRecording ? (
+                    <TouchableOpacity style={styles.audioButtonRecord} onPress={startRecording}>
+                      <Mic size={24} color="white" />
+                      <Text style={styles.audioButtonText}>Grabar</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity style={styles.audioButtonStop} onPress={stopRecording}>
+                      <StopCircle size={24} color="white" />
+                      <Text style={styles.audioButtonText}>Detener</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity style={styles.audioButtonSubir} onPress={pickAudioFile}>
+                    <Upload size={24} color="white" />
+                    <Text style={styles.audioButtonText}>Subir</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.audioButtonPlay}
+                    onPress={playAudio}
+                    disabled={!audioUri}
+                  >
+                    <Play size={24} color="white" />
+                    <Text style={styles.audioButtonText}>Reproducir</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.audioButtonProcesar,
+                      (!audioUri || processingAudio) && styles.audioButtonDisabled,
+                    ]}
+                    onPress={processAudioWithAI}
+                    disabled={!audioUri || processingAudio}
+                  >
+                    {processingAudio ? (
+                      <ActivityIndicator size="small" color="white" />
+                    ) : (
+                      <>
+                        <Sparkles size={20} color="white" />
+                        <Text style={styles.audioButtonText}>Procesar con IA</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+                {audioUri && !processingAudio && (
+                  <Text style={styles.audioInfo}>Audio listo para procesar</Text>
+                )}
+
+                <Text style={styles.label}>Nombre del medicamento *</Text>
+                <View style={styles.rowConBoton}>
+                  <View style={styles.nombreInputContainer}>
+                    <TextInput
+                      style={styles.input}
+                      value={manualFormData.nombre}
+                      onChangeText={(t) => setManualFormData({ ...manualFormData, nombre: t })}
+                      placeholder="Ej: Paracetamol"
+                    />
+                  </View>
+                  <TouchableOpacity
+                    style={styles.aiButton}
+                    onPress={() => consultarCategoriaPorTexto(manualFormData.nombre, true)}
+                    disabled={consultandoCategoria}
+                  >
+                    {consultandoCategoria ? (
+                      <ActivityIndicator size="small" color="#7C3AED" />
+                    ) : (
+                      <Sparkles size={20} color="#7C3AED" />
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.label}>Presentación</Text>
                 <TextInput
                   style={styles.input}
-                  value={manualFormData.nombre}
-                  onChangeText={(t) => setManualFormData({ ...manualFormData, nombre: t })}
-                  placeholder="Ej: Paracetamol"
+                  value={manualFormData.presentacion}
+                  onChangeText={(t) => setManualFormData({ ...manualFormData, presentacion: t })}
+                  placeholder="Ej: Tabletas 500mg"
                 />
-              </View>
-              <TouchableOpacity
-                style={styles.aiButton}
-                onPress={() => consultarCategoriaPorTexto(manualFormData.nombre, true)}
-                disabled={consultandoCategoria}
-              >
-                {consultandoCategoria ? (
-                  <ActivityIndicator size="small" color="#7C3AED" />
-                ) : (
-                  <Sparkles size={20} color="#7C3AED" />
-                )}
-              </TouchableOpacity>
-            </View>
 
-            <Text style={styles.label}>Presentación</Text>
-            <TextInput
-              style={styles.input}
-              value={manualFormData.presentacion}
-              onChangeText={(t) => setManualFormData({ ...manualFormData, presentacion: t })}
-              placeholder="Ej: Tabletas 500mg"
-            />
-
-            <Text style={styles.label}>Categoría</Text>
-            <CategoriaPicker
-              value={manualFormData.categoria}
-              onChange={(text) => setManualFormData({ ...manualFormData, categoria: text })}
-              onUbicacionChange={(ubicacion) =>
-                setManualFormData((prev) => ({ ...prev, ubicacion }))
-              }
-              placeholder="Seleccionar categoría"
-              showLabel={false}
-            />
-
-            <Text style={styles.label}>Cantidad *</Text>
-            <TextInput
-              style={styles.input}
-              value={manualFormData.cantidad}
-              onChangeText={(t) => setManualFormData({ ...manualFormData, cantidad: t })}
-              keyboardType="numeric"
-              placeholder="Ej: 50"
-            />
-
-            <Text style={styles.label}>Fecha de vencimiento *</Text>
-            <DatePickerInput
-              label=""
-              value={manualFormData.vencimiento}
-              onChange={(date) => setManualFormData({ ...manualFormData, vencimiento: date })}
-            />
-
-            <Text style={styles.label}>Ubicación</Text>
-            <TextInput
-              style={styles.input}
-              value={manualFormData.ubicacion}
-              onChangeText={(t) => setManualFormData((prev) => ({ ...prev, ubicacion: t }))}
-              placeholder="Ej: Estante A3"
-            />
-
-            <Text style={styles.label}>Foto (opcional)</Text>
-            <TouchableOpacity style={styles.imagePickerButton} onPress={pickManualImage}>
-              <ImageIcon size={24} color="#7C3AED" />
-              <Text style={styles.imagePickerText}>Seleccionar foto</Text>
-            </TouchableOpacity>
-            {manualImageUri && (
-              <View style={styles.manualPreviewContainer}>
-                <Image source={{ uri: manualImageUri }} style={styles.manualPreviewImage} />
-                <TouchableOpacity
-                  style={styles.clearManualImage}
-                  onPress={() => {
-                    setManualImageUri(null);
-                    setManualImageBase64(null);
-                    manualImageBase64Ref.current = null;
+                <Text style={styles.label}>Categoría</Text>
+                <CategoriaPicker
+                  value={manualFormData.categoria}
+                  onChange={async (text) => {
+                    setManualFormData((prev) => ({ ...prev, categoria: text }));
+                    const ubicacion = await obtenerUbicacionDesdeCategoria(text);
+                    if (ubicacion) {
+                      setManualFormData((prev) => ({ ...prev, ubicacion }));
+                    }
                   }}
-                >
-                  <X color="#DC2626" size={16} />
+                  placeholder="Seleccionar categoría"
+                  showLabel={false}
+                />
+
+                <Text style={styles.label}>Cantidad *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={manualFormData.cantidad}
+                  onChangeText={(t) => setManualFormData({ ...manualFormData, cantidad: t })}
+                  keyboardType="numeric"
+                  placeholder="Ej: 50"
+                />
+
+                <Text style={styles.label}>Fecha de vencimiento *</Text>
+                <DatePickerInput
+                  label=""
+                  value={manualFormData.vencimiento}
+                  onChange={(date) => setManualFormData({ ...manualFormData, vencimiento: date })}
+                />
+
+                <Text style={styles.label}>Ubicación</Text>
+                <TextInput
+                  style={styles.input}
+                  value={manualFormData.ubicacion}
+                  onChangeText={(t) => setManualFormData((prev) => ({ ...prev, ubicacion: t }))}
+                  placeholder="Ej: Estante A3"
+                />
+
+                <Text style={styles.label}>Foto (opcional)</Text>
+                <TouchableOpacity style={styles.imagePickerButton} onPress={pickManualImage}>
+                  <ImageIcon size={24} color="#7C3AED" />
+                  <Text style={styles.imagePickerText}>Seleccionar foto</Text>
+                </TouchableOpacity>
+                {manualImageUri && (
+                  <View style={styles.manualPreviewContainer}>
+                    <Image source={{ uri: manualImageUri }} style={styles.manualPreviewImage} />
+                    <TouchableOpacity
+                      style={styles.clearManualImage}
+                      onPress={() => {
+                        setManualImageUri(null);
+                        setManualImageBase64(null);
+                        manualImageBase64Ref.current = null;
+                      }}
+                    >
+                      <X color="#DC2626" size={16} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                <TouchableOpacity style={styles.saveButton} onPress={saveManualMedicamento}>
+                  <Text style={styles.saveButtonText}>Guardar Medicamento</Text>
                 </TouchableOpacity>
               </View>
-            )}
-
-            <TouchableOpacity style={styles.saveButton} onPress={saveManualMedicamento}>
-              <Text style={styles.saveButtonText}>Guardar Medicamento</Text>
-            </TouchableOpacity>
+            </ScrollView>
           </View>
-        </KeyboardAvoidingScrollView>
-      </View>
-    </Modal>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -1368,6 +1483,7 @@ const styles = StyleSheet.create({
   saveButtonDisabled: { opacity: 0.7 },
   saveButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
   processingSubtext: { fontSize: 14, color: '#6B7280', marginTop: 5 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1388,9 +1504,12 @@ const styles = StyleSheet.create({
     padding: 20,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+    backgroundColor: 'white', // ← fijo
   },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
-  modalBody: { padding: 20 },
+  modalBody: {
+    padding: 20,
+    maxHeight: '100%',
+  },
   ultimoMedicamentoSection: { marginHorizontal: 16, marginVertical: 10 },
   ultimoMedicamentoTitle: {
     fontSize: 14,

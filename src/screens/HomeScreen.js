@@ -13,16 +13,18 @@ import {
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import {
+  Trash,
   Package,
   AlertCircle,
   ChevronDown,
   ChevronUp,
-  Trash,
   Activity,
   Key,
   FileText,
   ClipboardList,
   MinusCircle,
+  Home,
+  Box,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { pb } from '../services/PocketBaseConfig';

@@ -1,7 +1,8 @@
+// App.js
 import EventSource from 'react-native-sse';
 
 global.EventSource = EventSource;
-// App.js
+
 import React, { useState, useEffect } from 'react';
 import { LogBox, View, ActivityIndicator, Platform, Dimensions, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
@@ -43,13 +44,21 @@ export default function App() {
   const [geminiApiKey, setGeminiApiKey] = useState('');
   const [bottomInset, setBottomInset] = useState(20);
 
-  // Cargar usuario guardado al iniciar
+  // ── Cargar usuario guardado al iniciar ──
   useEffect(() => {
+    let isMounted = true;
+
     const initializeApp = async () => {
+      if (!isMounted) return;
+
       await checkApiKey();
       await loadStoredUser();
-      setIsLoading(false);
+
+      if (isMounted) {
+        setIsLoading(false);
+      }
     };
+
     initializeApp();
 
     if (Platform.OS === 'android') {
@@ -64,6 +73,10 @@ export default function App() {
         }
       }, 100);
     }
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const checkApiKey = async () => {
@@ -79,7 +92,6 @@ export default function App() {
     }
   };
 
-  // App.js - loadStoredUser actualizado
   const loadStoredUser = async () => {
     try {
       // Cargar autenticación guardada de PocketBase
@@ -95,6 +107,16 @@ export default function App() {
         }
       }
 
+      // También verificar usuario guardado localmente
+      const localUserStr = await AsyncStorage.getItem('currentUser');
+      if (localUserStr) {
+        const localUser = JSON.parse(localUserStr);
+        setUser(localUser);
+        setIsLoggedIn(true);
+        console.log('✅ Usuario local restaurado:', localUser.nombre);
+        return;
+      }
+
       // No hay sesión guardada
       setIsLoggedIn(false);
     } catch (error) {
@@ -103,11 +125,12 @@ export default function App() {
     }
   };
 
-  // App.js - handleLogin simplificado (sin autenticación compleja)
   const handleLogin = async (username) => {
     try {
+      // Buscar en PocketBase
       const result = await pb.collection('usuarios').getList(1, 1, {
         filter: `nombre = "${username}"`,
+        requestKey: null,
       });
 
       if (result.items.length === 0) {
@@ -119,15 +142,17 @@ export default function App() {
       setUser(userData);
       setIsLoggedIn(true);
       await AsyncStorage.setItem('currentUser', JSON.stringify(userData));
+      console.log('✅ Login exitoso:', userData.nombre);
     } catch (error) {
       console.error('❌ Error de login:', error);
-      Alert.alert('Error', 'No se pudo conectar con el servidor');
+      Alert.alert('Error', 'Usuario no encontrado');
     }
   };
 
   const handleLogout = async () => {
     pb.authStore.clear();
     await AsyncStorage.removeItem('pb_auth');
+    await AsyncStorage.removeItem('currentUser');
     setUser(null);
     setIsLoggedIn(false);
   };
@@ -175,7 +200,13 @@ export default function App() {
                 },
               }}
             >
-              <Tab.Screen name="Inicio" options={{ title: 'FarmaRincón' }}>
+              <Tab.Screen
+                name="Inicio"
+                options={{
+                  title: 'FarmaRincón',
+                  tabBarIcon: ({ color, size }) => <Home color={color} size={size} />,
+                }}
+              >
                 {(props) => (
                   <HomeScreen
                     {...props}
@@ -186,7 +217,13 @@ export default function App() {
                 )}
               </Tab.Screen>
 
-              <Tab.Screen name="Inventario" options={{ title: 'Inventario' }}>
+              <Tab.Screen
+                name="Inventario"
+                options={{
+                  title: 'Inventario',
+                  tabBarIcon: ({ color, size }) => <Package color={color} size={size} />,
+                }}
+              >
                 {(props) => <InventoryScreen {...props} user={user} />}
               </Tab.Screen>
 
@@ -194,6 +231,7 @@ export default function App() {
                 <Tab.Screen
                   name="Registrar"
                   options={{
+                    title: 'Registrar',
                     tabBarIcon: ({ color, size }) => <PlusCircle color={color} size={size} />,
                   }}
                 >
@@ -216,6 +254,7 @@ export default function App() {
               <Tab.Screen
                 name="Pedidos"
                 options={{
+                  title: 'Pedidos',
                   tabBarIcon: ({ color, size }) => <ClipboardList color={color} size={size} />,
                 }}
               >
@@ -225,6 +264,7 @@ export default function App() {
               <Tab.Screen
                 name="Historial"
                 options={{
+                  title: 'Historial',
                   tabBarIcon: ({ color, size }) => <History color={color} size={size} />,
                 }}
               >

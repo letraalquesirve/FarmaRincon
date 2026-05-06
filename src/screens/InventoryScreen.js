@@ -1,5 +1,5 @@
 // src/screens/InventoryScreen.js
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,10 +16,14 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { Audio } from 'expo-av';
 import {
   Search,
   Package,
@@ -32,15 +36,23 @@ import {
   FileText,
   Edit,
   Copy,
+  Pill,
+  Calendar,
+  User,
+  MapPin,
+  Mic,
+  Camera,
+  Image as ImageIcon,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import { GestureHandlerRootView, GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { isAdmin } from '../services/AuthService';
 import { pb } from '../services/PocketBaseConfig';
 import DatePickerInput from '../components/DatePickerInput';
 import CategoriaPicker from '../components/CategoriaPicker';
 import { useFocusEffect } from '@react-navigation/native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
+
+const { width, height } = Dimensions.get('window');
 
 // ── Utilidades ───────────────────────────────────────────────
 const normalizeText = (text) => {
@@ -63,7 +75,7 @@ const escapeHtml = (text) => {
 };
 
 // ── Función para registrar en history ─────────────────────────
-const registrarHistory = async (idMed, fecha, user, movimiento, cantidad) => {
+const registrarHistory = async (idMed, fecha, user, movimiento, cantidad, nombreMed = '') => {
   try {
     await pb.collection('history').create({
       id_med: idMed,
@@ -71,32 +83,40 @@ const registrarHistory = async (idMed, fecha, user, movimiento, cantidad) => {
       user: user,
       movimiento: movimiento,
       cantidad: cantidad,
+      name: nombreMed,
     });
-    console.log(`📝 History registrado: ${movimiento} - ${idMed}`);
+    console.log(`📝 History registrado: ${movimiento} - ${nombreMed}`);
   } catch (error) {
     console.error('Error registrando history:', error);
   }
 };
 
 export default function InventoryScreen({ user }) {
-  // ── MEJORA 3: Separación clara de estado (activos crudos / filtrados) ──
-  const [activos, setActivos] = useState([]); // Datos crudos del servidor
-  const [filteredActivos, setFilteredActivos] = useState([]); // Datos filtrados localmente
-
-  // Estado existente
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filter, setFilter] = useState('todos');
+  // ── Estados ──
+  const [resultados, setResultados] = useState([]); // Solo los resultados de la última búsqueda
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [searchInputValue, setSearchInputValue] = useState('');
+  const [modoInactivos, setModoInactivos] = useState(false);
+  const [filter, setFilter] = useState('todos'); // todos, vigentes, porVencer, vencidos
   const [showFilters, setShowFilters] = useState(false);
-  const [showInactivos, setShowInactivos] = useState(false);
+
+  // Modales
   const [modalVisible, setModalVisible] = useState(false);
+  const [imageModalVisible, setImageModalVisible] = useState(false);
+  const [selectedMed, setSelectedMed] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedMedName, setSelectedMedName] = useState('');
   const [generatingPDF, setGeneratingPDF] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [duplicateModalVisible, setDuplicateModalVisible] = useState(false);
+  const [reactivarModalVisible, setReactivarModalVisible] = useState(false);
   const [currentEditMed, setCurrentEditMed] = useState(null);
   const [currentDuplicateMed, setCurrentDuplicateMed] = useState(null);
+  const [currentReactivarMed, setCurrentReactivarMed] = useState(null);
+  const [audioSound, setAudioSound] = useState(null);
+
+  // Formularios
   const [editForm, setEditForm] = useState({
     nombre: '',
     presentacion: '',
@@ -104,6 +124,8 @@ export default function InventoryScreen({ user }) {
     cantidad: '',
     vencimiento: '',
     ubicacion: '',
+    imagen: null,
+    audio: null,
   });
   const [duplicateForm, setDuplicateForm] = useState({
     nombre: '',
@@ -113,97 +135,19 @@ export default function InventoryScreen({ user }) {
     cantidad: '',
     vencimiento: '',
   });
+  const [reactivarForm, setReactivarForm] = useState({
+    nombre: '',
+    presentacion: '',
+    categoria: '',
+    cantidad: '',
+    vencimiento: '',
+    ubicacion: '',
+    imagen: null,
+  });
 
-  // Paginación de inactivos
-  const [inactivosVisibles, setInactivosVisibles] = useState([]);
-  const [ultimoDocInactivos, setUltimoDocInactivos] = useState(null);
-  const [cargandoInactivos, setCargandoInactivos] = useState(false);
-  const [hayMasInactivos, setHayMasInactivos] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [filtroExacto, setFiltroExacto] = useState({ activo: false, nombre: '', presentacion: '' });
   const navigation = useNavigation();
 
-  // Obtener parámetros de navegación
-  const route = useRoute();
-  const filterNombre = route.params?.filterNombre;
-  const filterPresentacion = route.params?.filterPresentacion;
-  const filterExacto = route.params?.filterExacto;
-
-  // Aplicar filtro al cargar
-  useEffect(() => {
-    if (filterNombre && filterExacto) {
-      const searchValue = filterPresentacion
-        ? `${filterNombre} ${filterPresentacion}`
-        : filterNombre;
-      setSearchTerm(searchValue);
-      navigation.setParams({ filterNombre: null, filterPresentacion: null, filterExacto: null });
-    }
-  }, []);
-
-  useEffect(() => {
-    const filterNombre = route.params?.filterNombre;
-    const filterPresentacion = route.params?.filterPresentacion;
-    const filterExactoParam = route.params?.filterExacto;
-
-    if (filterNombre && filterExactoParam) {
-      setFiltroExacto({
-        activo: true,
-        nombre: filterNombre,
-        presentacion: filterPresentacion,
-      });
-      setSearchTerm('');
-      navigation.setParams({ filterNombre: null, filterPresentacion: null, filterExacto: null });
-    }
-  }, [route.params]);
-
-  // Modificar getFilteredMeds para usar filtro exacto cuando está activo
-  const getFilteredMeds = () => {
-    if (filtroExacto.activo) {
-      return activos.filter((m) => {
-        const nombreMatch = m.nombre === filtroExacto.nombre;
-        const presentacionMatch = filtroExacto.presentacion
-          ? m.presentacion === filtroExacto.presentacion
-          : true;
-        return nombreMatch && presentacionMatch;
-      });
-    }
-
-    let filtered = [...activos];
-
-    if (searchTerm) {
-      const searchNorm = normalizeText(searchTerm);
-      filtered = filtered.filter(
-        (m) =>
-          normalizeText(m.nombre).includes(searchNorm) ||
-          normalizeText(m.presentacion || '').includes(searchNorm) ||
-          normalizeText(m.categoria || '').includes(searchNorm) ||
-          normalizeText(m.ubicacion || '').includes(searchNorm)
-      );
-    }
-
-    switch (filter) {
-      case 'vigentes':
-        filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
-        break;
-      case 'porVencer':
-        filtered = filtered.filter((m) => {
-          const days = getDaysUntilExpiry(m.vencimiento);
-          return days >= 0 && days <= 30;
-        });
-        break;
-      case 'vencidos':
-        filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
-        break;
-    }
-    return filtered;
-  };
-
-  // ── MEJORA 1: Ref para evitar cargas simultáneas ──
-  const isLoadingRef = useRef(false);
-  // ── Ref para mantener búsqueda entre recargas ──
-  const searchTermRef = useRef('');
-
-  // ── Zoom con gesture-handler ─────────────────────────────
+  // ── Zoom con gesture-handler para imagen ──
   const scale = useRef(new Animated.Value(1)).current;
   const savedScale = useRef(1);
 
@@ -227,7 +171,6 @@ export default function InventoryScreen({ user }) {
     });
 
   const composed = Gesture.Race(pinchGesture, doubleTap);
-
   const resetZoom = () => {
     savedScale.current = 1;
     scale.setValue(1);
@@ -235,7 +178,63 @@ export default function InventoryScreen({ user }) {
 
   const getUserName = () => user?.nombre || 'usuario';
 
-  // ── Función para obtener ubicación desde categoría ──
+  // ── Funciones de audio y foto ──
+  const playAudio = async (audioBase64) => {
+    if (!audioBase64) {
+      Alert.alert('Sin audio', 'Este medicamento no tiene audio asociado');
+      return;
+    }
+    try {
+      if (audioSound) {
+        await audioSound.unloadAsync();
+      }
+      const uri = `${FileSystem.cacheDirectory}temp_audio_${Date.now()}.mp3`;
+      await FileSystem.writeAsStringAsync(uri, audioBase64, { encoding: 'base64' });
+      const { sound } = await Audio.Sound.createAsync({ uri });
+      setAudioSound(sound);
+      await sound.playAsync();
+    } catch (error) {
+      console.error('Error reproduciendo audio:', error);
+      Alert.alert('Error', 'No se pudo reproducir el audio');
+    }
+  };
+
+  const tomarFoto = async (tipo, setFormCallback, formData) => {
+    try {
+      let result;
+      if (tipo === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Permiso denegado', 'Se necesita acceso a la cámara');
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          allowsEditing: true,
+          quality: 0.8,
+          base64: true,
+        });
+      } else {
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          quality: 0.8,
+          base64: true,
+        });
+      }
+      if (!result.canceled && result.assets[0]) {
+        const compressed = await ImageManipulator.manipulateAsync(
+          result.assets[0].uri,
+          [{ resize: { width: 600 } }],
+          { compress: 0.3, base64: true, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        setFormCallback({ ...formData, imagen: compressed.base64 });
+      }
+    } catch (error) {
+      console.error('Error tomando foto:', error);
+      Alert.alert('Error', 'No se pudo obtener la imagen');
+    }
+  };
+
   const obtenerUbicacionDesdeCategoria = async (categoriaNombre) => {
     try {
       const result = await pb.collection('categorias').getList(1, 1, {
@@ -251,257 +250,99 @@ export default function InventoryScreen({ user }) {
     }
   };
 
-  // ── Función de carga principal optimizada ──
-  const cargarActivos = useCallback(
-    async (isRefresh = false) => {
-      if (isLoadingRef.current) return;
-      isLoadingRef.current = true;
+  // ── BÚSQUEDA PRINCIPAL (solo bajo demanda) ──
+  const ejecutarBusqueda = async () => {
+    const term = searchInputValue.trim();
 
-      if (isRefresh) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
+    setLoading(true);
+    setResultados([]);
 
-      try {
-        const result = await pb.collection('medicamentos').getList(1, 1000, {
-          filter: 'activo = true',
-          sort: 'nombre',
-          requestKey: null,
-        });
-
-        setActivos(result.items);
-
-        const currentSearch = searchTermRef.current;
-        let filtered = [...result.items];
-
-        if (currentSearch.trim()) {
-          const searchNorm = normalizeText(currentSearch);
-          filtered = filtered.filter(
-            (m) =>
-              normalizeText(m.nombre).includes(searchNorm) ||
-              normalizeText(m.presentacion || '').includes(searchNorm) ||
-              normalizeText(m.categoria || '').includes(searchNorm) ||
-              normalizeText(m.ubicacion || '').includes(searchNorm)
-          );
-        }
-
-        if (filter !== 'todos') {
-          switch (filter) {
-            case 'vigentes':
-              filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
-              break;
-            case 'porVencer':
-              filtered = filtered.filter((m) => {
-                const days = getDaysUntilExpiry(m.vencimiento);
-                return days >= 0 && days <= 30;
-              });
-              break;
-            case 'vencidos':
-              filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
-              break;
-          }
-        }
-
-        setFilteredActivos(filtered);
-      } catch (error) {
-        if (!error.isAbort) {
-          console.error('Error cargando activos:', error);
-          Alert.alert('Error', 'No se pudo conectar con el servidor.');
-        }
-      } finally {
-        isLoadingRef.current = false;
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [filter]
-  );
-
-  // ── Cargar inactivos con paginación ──
-  const cargarInactivos = async (reset = false) => {
-    if (cargandoInactivos) return;
-    if (!reset && !hayMasInactivos) return;
-
-    setCargandoInactivos(true);
     try {
-      let result;
-      if (reset) {
-        result = await pb.collection('medicamentos').getList(1, 50, {
-          filter: 'activo = false',
-          sort: 'nombre',
-          requestKey: null,
-        });
-        setUltimoDocInactivos(result.items[result.items.length - 1]);
-        setInactivosVisibles(result.items);
+      let filterCondition = '';
+
+      // Construir filtro base según modo (activo/inactivo)
+      if (modoInactivos) {
+        filterCondition = 'activo = false';
       } else {
-        result = await pb.collection('medicamentos').getList(1, 50, {
-          filter: 'activo = false',
-          sort: 'nombre',
-          requestKey: null,
-        });
-        setInactivosVisibles((prev) => [...prev, ...result.items]);
+        filterCondition = 'activo = true';
       }
-      setHayMasInactivos(result.items.length === 50);
+
+      // Agregar filtro de búsqueda por nombre/presentación
+      if (term) {
+        const searchNorm = term.toLowerCase();
+        filterCondition += ` && (nombre ~ "${searchNorm}" || presentacion ~ "${searchNorm}" || categoria ~ "${searchNorm}")`;
+      }
+
+      // Agregar filtros de vigencia (solo para activos)
+      if (!modoInactivos && filter !== 'todos') {
+        const hoy = new Date();
+        const dentro30Dias = new Date();
+        dentro30Dias.setDate(hoy.getDate() + 30);
+
+        switch (filter) {
+          case 'vigentes':
+            filterCondition += ` && vencimiento > "${dentro30Dias.toISOString().split('T')[0]}"`;
+            break;
+          case 'porVencer':
+            filterCondition += ` && vencimiento >= "${hoy.toISOString().split('T')[0]}" && vencimiento <= "${dentro30Dias.toISOString().split('T')[0]}"`;
+            break;
+          case 'vencidos':
+            filterCondition += ` && vencimiento < "${hoy.toISOString().split('T')[0]}"`;
+            break;
+        }
+      }
+
+      console.log(`🔍 Buscando: ${filterCondition}`);
+
+      const result = await pb.collection('medicamentos').getList(1, 100, {
+        filter: filterCondition,
+        sort: 'nombre',
+        requestKey: null,
+      });
+
+      setResultados(result.items);
+      console.log(`📦 Encontrados: ${result.items.length} medicamentos`);
     } catch (error) {
-      if (!error.isAbort) {
-        console.error('Error cargando inactivos:', error);
-      }
+      console.error('Error en búsqueda:', error);
+      Alert.alert('Error', 'No se pudo realizar la búsqueda');
     } finally {
-      setCargandoInactivos(false);
+      setLoading(false);
     }
   };
 
-  // ── Refrescar al obtener foco ──
-  useFocusEffect(
-    useCallback(() => {
-      console.log('🔄 Recargando inventario por foco...');
-      cargarActivos();
-      if (showInactivos) {
-        cargarInactivos(true);
-      }
-    }, [cargarActivos, showInactivos])
-  );
+  // ── Cambiar entre activos/inactivos ──
+  const toggleModoInactivos = () => {
+    setModoInactivos(!modoInactivos);
+    setResultados([]);
+    setSearchInputValue('');
+    setFilter('todos');
+  };
 
-  // Mantener carga inicial
-  useEffect(() => {
-    cargarActivos();
-    if (showInactivos) {
-      cargarInactivos(true);
-    }
-  }, []);
+  // ── Limpiar búsqueda ──
+  const limpiarBusqueda = () => {
+    setSearchInputValue('');
+    setResultados([]);
+  };
 
+  // ── Refrescar (vuelve a ejecutar la última búsqueda) ──
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await cargarActivos(true);
-    if (showInactivos) {
-      await cargarInactivos(true);
-    }
+    await ejecutarBusqueda();
     setRefreshing(false);
-  }, [cargarActivos, showInactivos]);
+  }, []);
 
-  // ── Búsqueda LOCAL sin recargar BD ──
-  const handleSearch = (text) => {
-    setSearchTerm(text);
-    searchTermRef.current = text;
-
-    if (!text.trim()) {
-      let filtered = [...activos];
-      switch (filter) {
-        case 'vigentes':
-          filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
-          break;
-        case 'porVencer':
-          filtered = filtered.filter((m) => {
-            const days = getDaysUntilExpiry(m.vencimiento);
-            return days >= 0 && days <= 30;
-          });
-          break;
-        case 'vencidos':
-          filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
-          break;
-      }
-      setFilteredActivos(filtered);
-    } else {
-      const searchNorm = normalizeText(text);
-      let filtered = activos.filter(
-        (m) =>
-          normalizeText(m.nombre).includes(searchNorm) ||
-          normalizeText(m.presentacion || '').includes(searchNorm) ||
-          normalizeText(m.categoria || '').includes(searchNorm) ||
-          normalizeText(m.ubicacion || '').includes(searchNorm)
-      );
-
-      switch (filter) {
-        case 'vigentes':
-          filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
-          break;
-        case 'porVencer':
-          filtered = filtered.filter((m) => {
-            const days = getDaysUntilExpiry(m.vencimiento);
-            return days >= 0 && days <= 30;
-          });
-          break;
-        case 'vencidos':
-          filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
-          break;
-      }
-      setFilteredActivos(filtered);
-    }
-  };
-
-  // ── Manejar cambio de filtro ──
-  const handleFilterChange = (newFilter) => {
-    setFilter(newFilter);
-    let filtered = [...activos];
-
-    if (searchTermRef.current.trim()) {
-      const searchNorm = normalizeText(searchTermRef.current);
-      filtered = filtered.filter(
-        (m) =>
-          normalizeText(m.nombre).includes(searchNorm) ||
-          normalizeText(m.presentacion || '').includes(searchNorm) ||
-          normalizeText(m.categoria || '').includes(searchNorm) ||
-          normalizeText(m.ubicacion || '').includes(searchNorm)
-      );
-    }
-
-    switch (newFilter) {
-      case 'vigentes':
-        filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) > 30);
-        break;
-      case 'porVencer':
-        filtered = filtered.filter((m) => {
-          const days = getDaysUntilExpiry(m.vencimiento);
-          return days >= 0 && days <= 30;
-        });
-        break;
-      case 'vencidos':
-        filtered = filtered.filter((m) => getDaysUntilExpiry(m.vencimiento) < 0);
-        break;
-    }
-    setFilteredActivos(filtered);
-  };
-
-  const getFilteredInactivos = () => {
-    if (!searchTerm.trim()) return inactivosVisibles;
-    const searchNorm = normalizeText(searchTerm);
-    return inactivosVisibles.filter(
-      (m) =>
-        normalizeText(m.nombre).includes(searchNorm) ||
-        normalizeText(m.presentacion || '').includes(searchNorm) ||
-        normalizeText(m.categoria || '').includes(searchNorm) ||
-        normalizeText(m.ubicacion || '').includes(searchNorm)
-    );
-  };
-
-  const getFilterTitle = () => {
-    if (showInactivos) return 'LISTADO DE MEDICAMENTOS INACTIVOS';
-    switch (filter) {
-      case 'vigentes':
-        return 'LISTADO DE MEDICAMENTOS VIGENTES';
-      case 'porVencer':
-        return 'LISTADO DE MEDICAMENTOS POR VENCER';
-      case 'vencidos':
-        return 'LISTADO DE MEDICAMENTOS VENCIDOS';
-      default:
-        return 'LISTADO DE MEDICAMENTOS ACTIVOS';
-    }
-  };
-
-  // ── PDF ──
+  // ── Generar PDF con los resultados actuales ──
   const generatePDF = async () => {
-    const medicamentosParaPDF = showInactivos ? getFilteredInactivos() : filteredActivos;
-    const titulo =
-      showInactivos && searchTerm
-        ? `LISTADO DE MEDICAMENTOS INACTIVOS - BÚSQUEDA: "${searchTerm}"`
-        : getFilterTitle();
-
-    if (medicamentosParaPDF.length === 0) {
+    if (resultados.length === 0) {
       Alert.alert('Sin datos', 'No hay medicamentos para generar el PDF');
       return;
     }
+
     setGeneratingPDF(true);
+    const titulo = modoInactivos
+      ? `LISTADO DE MEDICAMENTOS INACTIVOS${searchInputValue ? ` - BÚSQUEDA: "${searchInputValue}"` : ''}`
+      : `LISTADO DE MEDICAMENTOS ACTIVOS${searchInputValue ? ` - BÚSQUEDA: "${searchInputValue}"` : ''}`;
+
     try {
       const today = new Date().toLocaleDateString('es-ES', {
         day: '2-digit',
@@ -510,8 +351,9 @@ export default function InventoryScreen({ user }) {
         hour: '2-digit',
         minute: '2-digit',
       });
+
       let tableRows = '';
-      medicamentosParaPDF.forEach((med, index) => {
+      resultados.forEach((med, index) => {
         const status =
           med.activo === false
             ? 'INACTIVO'
@@ -530,8 +372,9 @@ export default function InventoryScreen({ user }) {
             <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${new Date(med.vencimiento).toLocaleDateString()}</td>
             <td style="padding:10px;border-bottom:1px solid #e5e7eb;">${escapeHtml(med.ubicacion || '')}</td>
             <td style="padding:10px;border-bottom:1px solid #e5e7eb;font-weight:bold;">${status}</td>
-          </table>`;
+          </tr>`;
       });
+
       const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${titulo}</title>
         <style>
           *{margin:0;padding:0;box-sizing:border-box}
@@ -545,7 +388,7 @@ export default function InventoryScreen({ user }) {
           .footer{margin-top:20px;padding-top:10px;text-align:center;font-size:10px;color:#9CA3AF;border-top:1px solid #E5E7EB}
         </style></head><body>
         <div class="header"><div class="title">${titulo}</div><div class="subtitle">Generado: ${today}</div></div>
-        <div class="stats"><div class="stats-text">Total: ${medicamentosParaPDF.length} medicamentos</div></div>
+        <div class="stats"><div class="stats-text">Total: ${resultados.length} medicamentos</div></div>
         <table><thead><tr><th>#</th><th>Nombre</th><th>Presentación</th><th>Categoría</th><th>Stock</th><th>Vencimiento</th><th>Ubicación</th><th>Estado</th></tr></thead>
         <tbody>${tableRows}</tbody></table>
         <div class="footer"><div>FarmaRincón - Sistema de Gestión de Inventario</div></div>
@@ -556,8 +399,6 @@ export default function InventoryScreen({ user }) {
           mimeType: 'application/pdf',
           dialogTitle: 'Compartir reporte',
         });
-      } else {
-        Alert.alert('Error', 'No es posible compartir archivos en este dispositivo');
       }
     } catch (error) {
       console.error('Error generando PDF:', error);
@@ -567,7 +408,7 @@ export default function InventoryScreen({ user }) {
     }
   };
 
-  // ── Acciones de medicamentos con history ──
+  // ── Acciones CRUD (Edit, Delete, Duplicate, Reactivate) ──
   const handleSoftDelete = async (medId, medName) => {
     Alert.alert('Desactivar Medicamento', `¿Estás seguro de desactivar ${medName}?`, [
       { text: 'Cancelar', style: 'cancel' },
@@ -581,15 +422,16 @@ export default function InventoryScreen({ user }) {
               activo: false,
               fechabaja: new Date().toISOString(),
             });
-            // Registrar en history
             await registrarHistory(
               medId,
               new Date().toISOString(),
               getUserName(),
               'Desactivando',
-              medActual.cantidad
+              medActual.cantidad,
+              medActual.nombre
             );
-            await cargarActivos();
+            await ejecutarBusqueda();
+            setModalVisible(false);
             Alert.alert('Éxito', 'Medicamento desactivado');
           } catch {
             Alert.alert('Error', 'No se pudo desactivar');
@@ -599,39 +441,84 @@ export default function InventoryScreen({ user }) {
     ]);
   };
 
-  const handleReactivar = async (medId, medName) => {
-    Alert.alert('Reactivar Medicamento', `¿Reactivar ${medName}?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Reactivar',
-        onPress: async () => {
-          try {
-            const medActual = await pb.collection('medicamentos').getOne(medId);
-            await pb.collection('medicamentos').update(medId, {
-              activo: true,
-              fechabaja: null,
-            });
-            await registrarHistory(
-              medId,
-              new Date().toISOString(),
-              getUserName(),
-              'Reactivando',
-              medActual.cantidad
-            );
-            await cargarActivos();
-            if (showInactivos) {
-              await cargarInactivos(true);
-            }
-            Alert.alert('Éxito', 'Medicamento reactivado');
-          } catch {
-            Alert.alert('Error', 'No se pudo reactivar');
-          }
-        },
-      },
-    ]);
+  const openReactivarModal = (med) => {
+    setCurrentReactivarMed(med);
+    setReactivarForm({
+      nombre: med.nombre || '',
+      presentacion: med.presentacion || '',
+      categoria: med.categoria || '',
+      cantidad: med.cantidad ? med.cantidad.toString() : '',
+      vencimiento: med.vencimiento || '',
+      ubicacion: med.ubicacion || '',
+      imagen: med.imagen || null,
+    });
+    setModalVisible(false);
+    setReactivarModalVisible(true);
   };
 
-  // ── EDITAR MEDICAMENTO ──
+  const handleSaveReactivar = async () => {
+    if (!reactivarForm.nombre.trim()) {
+      Alert.alert('Error', 'El nombre es obligatorio');
+      return;
+    }
+    if (!reactivarForm.cantidad || parseInt(reactivarForm.cantidad) <= 0) {
+      Alert.alert('Error', 'Ingresa una cantidad válida');
+      return;
+    }
+    if (!reactivarForm.vencimiento) {
+      Alert.alert('Error', 'La fecha de vencimiento es obligatoria');
+      return;
+    }
+
+    try {
+      let ubicacionFinal = reactivarForm.ubicacion.trim();
+      if (reactivarForm.categoria !== currentReactivarMed.categoria) {
+        const ubicacionDesdeCategoria = await obtenerUbicacionDesdeCategoria(
+          reactivarForm.categoria
+        );
+        if (ubicacionDesdeCategoria) {
+          ubicacionFinal = ubicacionDesdeCategoria;
+        }
+      }
+
+      await pb.collection('medicamentos').update(currentReactivarMed.id, {
+        nombre: reactivarForm.nombre.trim(),
+        presentacion: reactivarForm.presentacion.trim() || 'No especificada',
+        categoria: reactivarForm.categoria.trim() || 'Sin categoría',
+        cantidad: parseInt(reactivarForm.cantidad),
+        vencimiento: reactivarForm.vencimiento,
+        ubicacion: ubicacionFinal,
+        activo: true,
+        fechabaja: null,
+        fechaedicion: new Date().toISOString(),
+        editadopor: getUserName(),
+        fechaReactivacion: new Date().toISOString(),
+      });
+
+      if (reactivarForm.imagen !== currentReactivarMed.imagen && reactivarForm.imagen) {
+        await pb.collection('medicamentos').update(currentReactivarMed.id, {
+          imagen: reactivarForm.imagen,
+        });
+      }
+
+      await registrarHistory(
+        currentReactivarMed.id,
+        new Date().toISOString(),
+        getUserName(),
+        'Reactivando',
+        parseInt(reactivarForm.cantidad),
+        currentReactivarMed.nombre
+      );
+
+      await ejecutarBusqueda();
+      Alert.alert('Éxito', 'Medicamento reactivado correctamente');
+      setReactivarModalVisible(false);
+    } catch (error) {
+      console.error('Error reactivando:', error);
+      Alert.alert('Error', 'No se pudo reactivar el medicamento');
+    }
+  };
+
   const openEditModal = (med) => {
     setCurrentEditMed(med);
     setEditForm({
@@ -641,7 +528,10 @@ export default function InventoryScreen({ user }) {
       cantidad: med.cantidad ? med.cantidad.toString() : '',
       vencimiento: med.vencimiento || '',
       ubicacion: med.ubicacion || '',
+      imagen: med.imagen || null,
+      audio: med.audio || null,
     });
+    setModalVisible(false);
     setEditModalVisible(true);
   };
 
@@ -664,7 +554,6 @@ export default function InventoryScreen({ user }) {
       const nuevaCantidad = parseInt(editForm.cantidad);
       const diferencia = nuevaCantidad - cantidadAnterior;
 
-      // Obtener ubicación desde categoría si se cambió la categoría
       let ubicacionFinal = editForm.ubicacion.trim();
       if (editForm.categoria !== currentEditMed.categoria) {
         const ubicacionDesdeCategoria = await obtenerUbicacionDesdeCategoria(editForm.categoria);
@@ -684,18 +573,24 @@ export default function InventoryScreen({ user }) {
         editadopor: getUserName(),
       });
 
-      // Registrar en history si hubo cambio de cantidad
+      if (editForm.imagen !== currentEditMed.imagen && editForm.imagen) {
+        await pb.collection('medicamentos').update(currentEditMed.id, {
+          imagen: editForm.imagen,
+        });
+      }
+
       if (diferencia !== 0) {
         await registrarHistory(
           currentEditMed.id,
           new Date().toISOString(),
           getUserName(),
           diferencia > 0 ? 'Añadiendo' : 'Entregando',
-          Math.abs(diferencia)
+          Math.abs(diferencia),
+          currentEditMed.nombre
         );
       }
 
-      await cargarActivos();
+      await ejecutarBusqueda();
       Alert.alert('Éxito', 'Medicamento actualizado correctamente');
       setEditModalVisible(false);
     } catch (error) {
@@ -704,7 +599,6 @@ export default function InventoryScreen({ user }) {
     }
   };
 
-  // ── DUPLICAR MEDICAMENTO ──
   const openDuplicateModal = (med) => {
     setCurrentDuplicateMed(med);
     setDuplicateForm({
@@ -715,6 +609,7 @@ export default function InventoryScreen({ user }) {
       cantidad: '',
       vencimiento: '',
     });
+    setModalVisible(false);
     setDuplicateModalVisible(true);
   };
 
@@ -733,7 +628,6 @@ export default function InventoryScreen({ user }) {
     }
 
     try {
-      // Obtener ubicación desde categoría
       const ubicacionDesdeCategoria = await obtenerUbicacionDesdeCategoria(duplicateForm.categoria);
       const ubicacionFinal = ubicacionDesdeCategoria || duplicateForm.ubicacion.trim();
 
@@ -758,10 +652,11 @@ export default function InventoryScreen({ user }) {
         new Date().toISOString(),
         getUserName(),
         'Añadiendo',
-        parseInt(duplicateForm.cantidad)
+        parseInt(duplicateForm.cantidad),
+        duplicateForm.nombre
       );
 
-      await cargarActivos();
+      await ejecutarBusqueda();
       Alert.alert('Éxito', 'Medicamento duplicado correctamente');
       setDuplicateModalVisible(false);
     } catch (error) {
@@ -772,24 +667,42 @@ export default function InventoryScreen({ user }) {
 
   // ── Modal de imagen ──
   const openImageModal = (imageBase64, medName) => {
-    if (!imageBase64) return;
+    if (!imageBase64) {
+      Alert.alert('Error', 'No hay imagen para mostrar');
+      return;
+    }
+    console.log('🖼️ tipo imagen:', typeof imageBase64);
+    console.log('🖼️ es string:', typeof imageBase64 === 'string');
+    console.log('🖼️ longitud:', imageBase64?.length);
+    console.log('🖼️ primeros 80 chars:', String(imageBase64).substring(0, 80));
+    console.log('🖼️ tiene base64,:', String(imageBase64).includes('base64,'));
+    console.log('🖼️ empieza con data:', String(imageBase64).startsWith('data'));
+
     resetZoom();
-    const clean = imageBase64.includes('base64,') ? imageBase64.split('base64,')[1] : imageBase64;
-    setSelectedImage(clean);
+    const cleanImage = imageBase64.includes('base64,')
+      ? imageBase64.split('base64,')[1]
+      : imageBase64;
+    console.log('🖼️ cleanImage primeros 80:', cleanImage.substring(0, 80));
+    setSelectedImage(cleanImage);
     setSelectedMedName(medName);
-    setModalVisible(true);
+    setImageModalVisible(true);
   };
 
   const closeImageModal = () => {
     resetZoom();
-    setModalVisible(false);
+    setImageModalVisible(false);
   };
 
   const shareImage = async () => {
     if (!selectedImage) return;
     try {
       const filename = `${FileSystem.cacheDirectory}med_${Date.now()}.jpg`;
-      await FileSystem.writeAsStringAsync(filename, selectedImage, {
+      // ✅ FIX: selectedImage ya es base64 puro, pero por seguridad extraemos
+      // solo la parte después de "base64," por si acaso tuviera prefijo.
+      const base64Pure = selectedImage.includes('base64,')
+        ? selectedImage.split('base64,')[1]
+        : selectedImage;
+      await FileSystem.writeAsStringAsync(filename, base64Pure, {
         encoding: 'base64',
       });
       const isAvailable = await Sharing.isAvailableAsync();
@@ -809,123 +722,69 @@ export default function InventoryScreen({ user }) {
   };
 
   // ── Status helpers ──
-  const getStatusColor = (fecha) => {
+  const getStatusBorderColor = (fecha, activo) => {
+    if (!activo) return '#9CA3AF';
     const days = getDaysUntilExpiry(fecha);
-    if (days < 0) return styles.vencido;
-    if (days <= 30) return styles.porVencer;
-    return styles.vigente;
+    if (days < 0) return '#DC2626';
+    if (days <= 30) return '#EA580C';
+    return '#22C55E';
   };
 
-  const getStatusText = (fecha) => {
+  const getStatusText = (fecha, activo) => {
+    if (!activo) return 'INACTIVO';
     const days = getDaysUntilExpiry(fecha);
     if (days < 0) return 'VENCIDO';
     if (days <= 30) return `Vence en ${days} días`;
     return 'Vigente';
   };
 
-  const userIsAdmin = isAdmin(user);
-  const medicamentosActivos = getFilteredMeds();
-
-  if (loading && activos.length === 0) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size={50} color="#7C3AED" />
-        <Text style={styles.loadingText}>Cargando inventario...</Text>
-      </View>
+  // ── Card de medicamento ──
+  const InventoryCard = ({ med }) => {
+    const isInactivo = med.activo === false;
+    const borderColor = getStatusBorderColor(med.vencimiento, !isInactivo);
+    const statusText = getStatusText(med.vencimiento, !isInactivo);
+    console.log(
+      '🔍 render - imageModalVisible:',
+      imageModalVisible,
+      'selectedImage len:',
+      selectedImage?.length
     );
-  }
-
-  // ── Componente de tarjeta de medicamento ──
-  const MedCard = ({ med, isInactivo = false }) => (
-    <View
-      key={med.id}
-      style={[styles.card, isInactivo ? styles.cardInactivo : getStatusColor(med.vencimiento)]}
-    >
-      <View style={styles.cardContent}>
-        <View style={styles.cardHeader}>
-          <View style={styles.medInfo}>
-            <Text style={styles.medName}>{med.nombre}</Text>
-            <Text style={styles.medPresentation}>{med.presentacion}</Text>
-            <Text style={styles.medCategory}>📋 {med.categoria}</Text>
-            {med.ubicacion && <Text style={styles.medUbicacion}>📍 {med.ubicacion}</Text>}
-            {med.username && <Text style={styles.medUser}>👤 Registrado por: {med.username}</Text>}
-          </View>
-          {med.imagen && (
-            <TouchableOpacity onPress={() => openImageModal(med.imagen, med.nombre)}>
-              <Image
-                source={{
-                  uri: `data:image/jpeg;base64,${med.imagen.includes('base64,') ? med.imagen.split('base64,')[1] : med.imagen}`,
-                }}
-                style={styles.medImage}
-              />
-              <View style={styles.zoomHint}>
-                <ZoomIn color="white" size={12} />
-              </View>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <View style={styles.medDetails}>
-          <View style={styles.quantityContainer}>
-            <Text style={styles.quantityLabel}>Cantidad:</Text>
-            <Text style={styles.quantityValue}>{med.cantidad} uds</Text>
-          </View>
-          <View style={styles.expiryContainer}>
-            <Text style={styles.expiryLabel}>Vencimiento:</Text>
-            <Text style={styles.expiryValue}>{new Date(med.vencimiento).toLocaleDateString()}</Text>
-          </View>
-          {!isInactivo && (
-            <View style={styles.statusContainer}>
-              <View style={[styles.statusBadge, getStatusColor(med.vencimiento)]}>
-                <Text style={styles.statusText}>{getStatusText(med.vencimiento)}</Text>
-              </View>
-            </View>
-          )}
-          {med.fechabaja && (
-            <Text style={styles.fechaBaja}>
-              Dado de baja: {new Date(med.fechabaja).toLocaleDateString()}
+    return (
+      <TouchableOpacity
+        style={[styles.historyCardCompact, { borderLeftColor: borderColor }]}
+        onPress={() => {
+          setSelectedMed(med);
+          setModalVisible(true);
+        }}
+        activeOpacity={0.7}
+      >
+        <View style={styles.cardRowCompact}>
+          <View style={styles.medicamentoContainerCompact}>
+            <Pill color="#7C3AED" size={10} />
+            <Text style={styles.medicamentoTextCompact} numberOfLines={1}>
+              {med.nombre} {med.presentacion ? `(${med.presentacion})` : ''}
             </Text>
-          )}
+          </View>
+          <Text style={styles.cantidadTextCompact}>{med.cantidad} uds</Text>
         </View>
-
-        <View style={styles.actionButtons}>
-          {!isInactivo && (
-            <>
-              <TouchableOpacity style={styles.editButton} onPress={() => openEditModal(med)}>
-                <Edit color="#7C3AED" size={16} />
-                <Text style={styles.editButtonText}>Editar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.duplicateButton}
-                onPress={() => openDuplicateModal(med)}
-              >
-                <Copy color="#7C3AED" size={16} />
-                <Text style={styles.duplicateButtonText}>Duplicar</Text>
-              </TouchableOpacity>
-            </>
-          )}
-          {isInactivo ? (
-            <TouchableOpacity
-              style={styles.reactivarButton}
-              onPress={() => handleReactivar(med.id, med.nombre)}
-            >
-              <Text style={styles.reactivarButtonText}>Reactivar</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={styles.deleteButton}
-              onPress={() => handleSoftDelete(med.id, med.nombre)}
-            >
-              <Trash color="#DC2626" size={18} />
-              <Text style={styles.deleteButtonText}>Desactivar</Text>
-            </TouchableOpacity>
-          )}
+        <View style={styles.cardRowCompact}>
+          <Text style={styles.categoriaTextCompact}>{med.categoria || 'Sin categoría'}</Text>
+          <View style={[styles.statusBadgeCompact, { backgroundColor: borderColor + '20' }]}>
+            <Text style={[styles.statusTextCompact, { color: borderColor }]}>{statusText}</Text>
+          </View>
         </View>
-      </View>
-    </View>
-  );
+        {med.ubicacion && (
+          <View style={styles.cardRowCompact}>
+            <MapPin color="#6B7280" size={8} />
+            <Text style={styles.ubicacionTextCompact} numberOfLines={1}>
+              {med.ubicacion}
+            </Text>
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
 
-  // ── Render ──
   return (
     <View style={styles.container}>
       {/* Header con búsqueda */}
@@ -934,125 +793,107 @@ export default function InventoryScreen({ user }) {
           <Search color="#9CA3AF" size={20} style={styles.searchIcon} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Buscar medicamento..."
+            placeholder={modoInactivos ? 'Buscar medicamento inactivo...' : 'Buscar medicamento...'}
             placeholderTextColor="#9CA3AF"
-            value={searchTerm}
-            onChangeText={handleSearch}
+            value={searchInputValue}
+            onChangeText={setSearchInputValue}
+            onSubmitEditing={ejecutarBusqueda}
+            returnKeyType="search"
           />
-          {searchTerm !== '' && (
-            <TouchableOpacity onPress={() => handleSearch('')}>
+          <TouchableOpacity style={styles.searchButtonSmall} onPress={ejecutarBusqueda}>
+            <Text style={styles.searchButtonSmallText}>Buscar</Text>
+          </TouchableOpacity>
+          {searchInputValue !== '' && (
+            <TouchableOpacity onPress={limpiarBusqueda}>
               <X color="#9CA3AF" size={20} />
             </TouchableOpacity>
           )}
         </View>
+
         <View style={styles.headerButtons}>
+          {/* Botón de filtros (solo visible en modo activos) */}
+          {!modoInactivos && (
+            <TouchableOpacity
+              style={styles.filterButton}
+              onPress={() => setShowFilters(!showFilters)}
+            >
+              <Filter color="#7C3AED" size={20} />
+              <Text style={styles.filterButtonText}>Filtros</Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
-            style={styles.filterButton}
-            onPress={() => setShowFilters(!showFilters)}
+            style={[styles.inactivosButton, modoInactivos && styles.inactivosButtonActive]}
+            onPress={toggleModoInactivos}
           >
-            <Filter color="#7C3AED" size={20} />
-            <Text style={styles.filterButtonText}>Filtros</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.inactivosButton, showInactivos && styles.inactivosButtonActive]}
-            onPress={() => setShowInactivos(!showInactivos)}
-          >
-            <AlertCircle color={showInactivos ? 'white' : '#6B7280'} size={20} />
+            <AlertCircle color={modoInactivos ? 'white' : '#6B7280'} size={20} />
             <Text
               style={[
                 styles.inactivosButtonText,
-                showInactivos && styles.inactivosButtonTextActive,
+                modoInactivos && styles.inactivosButtonTextActive,
               ]}
             >
-              Ver inactivos
+              {modoInactivos ? 'Activos' : 'Inactivos'}
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* Filtros (solo para activos) */}
+        {showFilters && !modoInactivos && (
+          <View style={styles.filtersContainer}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {[
+                { key: 'todos', label: 'Todos' },
+                { key: 'vigentes', label: 'Vigentes' },
+                { key: 'porVencer', label: 'Por vencer' },
+                { key: 'vencidos', label: 'Vencidos' },
+              ].map((f) => (
+                <TouchableOpacity
+                  key={f.key}
+                  style={[styles.filterChip, filter === f.key && styles.filterChipActive]}
+                  onPress={() => {
+                    setFilter(f.key);
+                    ejecutarBusqueda();
+                  }}
+                >
+                  <Text
+                    style={[styles.filterChipText, filter === f.key && styles.filterChipTextActive]}
+                  >
+                    {f.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
       </View>
 
-      {/* Chips de filtro */}
-      {showFilters && !showInactivos && (
-        <View style={styles.filtersContainer}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {[
-              { key: 'todos', label: `Todos (${activos.length})` },
-              { key: 'vigentes', label: 'Vigentes' },
-              { key: 'porVencer', label: 'Por vencer' },
-              { key: 'vencidos', label: 'Vencidos' },
-            ].map((f) => (
-              <TouchableOpacity
-                key={f.key}
-                style={[styles.filterChip, filter === f.key && styles.filterChipActive]}
-                onPress={() => handleFilterChange(f.key)}
-              >
-                <Text
-                  style={[styles.filterChipText, filter === f.key && styles.filterChipTextActive]}
-                >
-                  {f.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
-
-      {/* Lista */}
+      {/* Lista de resultados */}
       <ScrollView
         style={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Activos */}
-        {!showInactivos && medicamentosActivos.length === 0 && (
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#7C3AED" />
+            <Text style={styles.loadingText}>Buscando medicamentos...</Text>
+          </View>
+        ) : resultados.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Package color="#D1D5DB" size={64} />
             <Text style={styles.emptyTitle}>No hay medicamentos</Text>
             <Text style={styles.emptyText}>
-              {searchTerm
-                ? 'Intenta con otra búsqueda'
-                : 'Agrega medicamentos desde la pestaña Registrar'}
+              {searchInputValue
+                ? 'No se encontraron resultados'
+                : `Escribe un nombre y presiona "Buscar" para encontrar ${modoInactivos ? 'medicamentos inactivos' : 'medicamentos'}`}
             </Text>
           </View>
-        )}
-
-        {!showInactivos && medicamentosActivos.length > 0 && (
-          <>
-            <View style={styles.resultsHeader}>
-              <Text style={styles.resultsText}>{medicamentosActivos.length} encontrados</Text>
-              <TouchableOpacity
-                style={styles.pdfButton}
-                onPress={generatePDF}
-                disabled={generatingPDF}
-              >
-                <FileText color="#7C3AED" size={18} />
-                <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
-              </TouchableOpacity>
-            </View>
-            {filtroExacto.activo && (
-              <View style={styles.filtroExactoContainer}>
-                <Text style={styles.filtroExactoText}>
-                  Mostrando: {filtroExacto.nombre}
-                  {filtroExacto.presentacion ? ` ${filtroExacto.presentacion}` : ''}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => setFiltroExacto({ activo: false, nombre: '', presentacion: '' })}
-                >
-                  <X size={16} color="#7C3AED" />
-                </TouchableOpacity>
-              </View>
-            )}
-            {medicamentosActivos.map((med) => (
-              <MedCard key={med.id} med={med} />
-            ))}
-          </>
-        )}
-
-        {/* Inactivos */}
-        {showInactivos && (
+        ) : (
           <>
             <View style={styles.resultsHeader}>
               <Text style={styles.resultsText}>
-                Inactivos ({getFilteredInactivos().length}
-                {hayMasInactivos && !searchTerm ? '+' : ''})
+                {resultados.length} {resultados.length === 1 ? 'medicamento' : 'medicamentos'}{' '}
+                encontrados
               </Text>
               <TouchableOpacity
                 style={styles.pdfButton}
@@ -1063,92 +904,144 @@ export default function InventoryScreen({ user }) {
                 <Text style={styles.pdfButtonText}>{generatingPDF ? 'Generando...' : 'PDF'}</Text>
               </TouchableOpacity>
             </View>
-            {filtroExacto.activo && (
-              <View style={styles.filtroExactoContainer}>
-                <Text style={styles.filtroExactoText}>
-                  Mostrando: {filtroExacto.nombre}
-                  {filtroExacto.presentacion ? ` ${filtroExacto.presentacion}` : ''}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => setFiltroExacto({ activo: false, nombre: '', presentacion: '' })}
-                >
-                  <X size={16} color="#7C3AED" />
-                </TouchableOpacity>
-              </View>
-            )}
-            {getFilteredInactivos().length === 0 && searchTerm ? (
-              <View style={styles.emptyContainer}>
-                <Package color="#D1D5DB" size={64} />
-                <Text style={styles.emptyTitle}>No hay resultados</Text>
-                <Text style={styles.emptyText}>No se encontraron inactivos con "{searchTerm}"</Text>
-              </View>
-            ) : (
-              getFilteredInactivos().map((med) => <MedCard key={med.id} med={med} isInactivo />)
-            )}
-
-            {!searchTerm && (
-              <>
-                {cargandoInactivos && (
-                  <View style={styles.loadingMore}>
-                    <ActivityIndicator size="small" color="#7C3AED" />
-                    <Text style={styles.loadingMoreText}>Cargando más...</Text>
-                  </View>
-                )}
-                {!cargandoInactivos && hayMasInactivos && (
-                  <TouchableOpacity
-                    style={styles.loadMoreButton}
-                    onPress={() => cargarInactivos(false)}
-                  >
-                    <Text style={styles.loadMoreText}>Cargar más (50 más)</Text>
-                  </TouchableOpacity>
-                )}
-                {!cargandoInactivos && !hayMasInactivos && inactivosVisibles.length > 0 && (
-                  <Text style={styles.endOfListText}>✓ Todos los inactivos cargados</Text>
-                )}
-              </>
-            )}
+            {resultados.map((med) => (
+              <InventoryCard key={med.id} med={med} />
+            ))}
           </>
         )}
       </ScrollView>
 
-      {/* Modal de imagen */}
+      {/* MODALES (sin cambios en el contenido, solo en lógica) */}
+      {/* MODAL DE DETALLE DEL MEDICAMENTO */}
       <Modal
         visible={modalVisible}
-        transparent={false}
         animationType="slide"
-        onRequestClose={closeImageModal}
+        transparent={true}
+        onRequestClose={() => setModalVisible(false)}
       >
-        <GestureHandlerRootView style={{ flex: 1 }}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle} numberOfLines={1}>
-              {selectedMedName}
-            </Text>
-          </View>
-          <View style={styles.modalContainer}>
-            <TouchableOpacity style={styles.modalCloseButton} onPress={closeImageModal}>
-              <X color="white" size={28} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.modalShareButton} onPress={shareImage}>
-              <Share2 color="white" size={24} />
-            </TouchableOpacity>
-            <GestureDetector gesture={composed}>
-              <Animated.View style={[styles.modalImageWrapper, { transform: [{ scale }] }]}>
-                {selectedImage && (
+        <View style={styles.modalOverlay}>
+          <View style={styles.detailModalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { fontSize: 17 }]} numberOfLines={1}>
+                {selectedMed?.nombre}
+              </Text>
+              <TouchableOpacity onPress={() => setModalVisible(false)}>
+                <X color="#6B7280" size={24} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.detailModalBody}>
+              <View style={styles.detailRow}>
+                <Pill color="#7C3AED" size={15} />
+                <Text style={[styles.detailLabel, { fontSize: 13 }]}>Nombre:</Text>
+                <Text style={[styles.detailValue, { fontSize: 13 }]}>{selectedMed?.nombre}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Package color="#7C3AED" size={15} />
+                <Text style={[styles.detailLabel, { fontSize: 13 }]}>Presentación:</Text>
+                <Text style={[styles.detailValue, { fontSize: 13 }]}>
+                  {selectedMed?.presentacion || 'No especificada'}
+                </Text>
+              </View>
+              <View style={styles.detailRow}>
+                <FileText color="#7C3AED" size={15} />
+                <Text style={[styles.detailLabel, { fontSize: 13 }]}>Categoría:</Text>
+                <Text style={[styles.detailValue, { fontSize: 13 }]}>
+                  {selectedMed?.categoria || 'Sin categoría'}
+                </Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Package color="#7C3AED" size={15} />
+                <Text style={[styles.detailLabel, { fontSize: 13 }]}>Cantidad:</Text>
+                <Text style={[styles.detailValue, { fontSize: 13 }]}>
+                  {selectedMed?.cantidad} unidades
+                </Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Calendar color="#7C3AED" size={15} />
+                <Text style={[styles.detailLabel, { fontSize: 13 }]}>Vencimiento:</Text>
+                <Text style={[styles.detailValue, { fontSize: 13 }]}>
+                  {selectedMed?.vencimiento
+                    ? new Date(selectedMed.vencimiento).toLocaleDateString()
+                    : 'No especificada'}
+                </Text>
+              </View>
+              <View style={styles.detailRow}>
+                <MapPin color="#7C3AED" size={15} />
+                <Text style={[styles.detailLabel, { fontSize: 13 }]}>Ubicación:</Text>
+                <Text style={[styles.detailValue, { fontSize: 13 }]}>
+                  {selectedMed?.ubicacion || 'No especificada'}
+                </Text>
+              </View>
+              <View style={styles.detailRow}>
+                <User color="#7C3AED" size={15} />
+                <Text style={[styles.detailLabel, { fontSize: 13 }]}>Registrado por:</Text>
+                <Text style={[styles.detailValue, { fontSize: 13 }]}>
+                  {selectedMed?.username || 'usuario'}
+                </Text>
+              </View>
+
+              {selectedMed?.imagen && (
+                <TouchableOpacity
+                  style={styles.imagePreviewButton}
+                  onPress={() => openImageModal(selectedMed.imagen, selectedMed.nombre)}
+                >
                   <Image
-                    source={{ uri: `data:image/jpeg;base64,${selectedImage}` }}
-                    style={styles.modalImage}
-                    resizeMode="contain"
-                    onError={() => Alert.alert('Error', 'No se pudo cargar la imagen')}
+                    source={{
+                      uri: `data:image/jpeg;base64,${selectedMed.imagen.includes('base64,') ? selectedMed.imagen.split('base64,')[1] : selectedMed.imagen}`,
+                    }}
+                    style={styles.detailImage}
                   />
+                  <Text style={[styles.imagePreviewText, { fontSize: 13 }]}>Ver imagen</Text>
+                </TouchableOpacity>
+              )}
+
+              <View style={styles.detailButtons}>
+                {!modoInactivos && selectedMed?.activo !== false && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.editDetailButton}
+                      onPress={() => openEditModal(selectedMed)}
+                    >
+                      <Edit color="#7C3AED" size={16} />
+                      <Text style={[styles.editDetailButtonText, { fontSize: 13 }]}>Editar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.duplicateDetailButton}
+                      onPress={() => openDuplicateModal(selectedMed)}
+                    >
+                      <Copy color="#7C3AED" size={16} />
+                      <Text style={[styles.duplicateDetailButtonText, { fontSize: 13 }]}>
+                        Duplicar
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.deleteDetailButton}
+                      onPress={() => handleSoftDelete(selectedMed.id, selectedMed.nombre)}
+                    >
+                      <Trash color="#DC2626" size={16} />
+                      <Text style={[styles.deleteDetailButtonText, { fontSize: 13 }]}>
+                        Desactivar
+                      </Text>
+                    </TouchableOpacity>
+                  </>
                 )}
-              </Animated.View>
-            </GestureDetector>
-            <Text style={styles.modalHint}>Pellizca para zoom · Doble toque para resetear</Text>
+                {modoInactivos && selectedMed?.activo === false && (
+                  <TouchableOpacity
+                    style={styles.reactivarDetailButton}
+                    onPress={() => openReactivarModal(selectedMed)}
+                  >
+                    <Text style={[styles.reactivarDetailButtonText, { fontSize: 13 }]}>
+                      Reactivar
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </ScrollView>
           </View>
-        </GestureHandlerRootView>
+        </View>
       </Modal>
 
-      {/* Modal de Editar */}
+      {/* MODAL DE EDICIÓN */}
       <Modal
         visible={editModalVisible}
         animationType="slide"
@@ -1166,40 +1059,32 @@ export default function InventoryScreen({ user }) {
               keyboardShouldPersistTaps="handled"
             >
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Editar Medicamento</Text>
+                <Text style={[styles.modalTitle, { fontSize: 17 }]}>Editar Medicamento</Text>
                 <TouchableOpacity onPress={() => setEditModalVisible(false)}>
                   <X color="#6B7280" size={24} />
                 </TouchableOpacity>
               </View>
               <View style={styles.modalBody}>
-                <Text style={styles.label}>Nombre *</Text>
+                <Text style={[styles.label, { fontSize: 13 }]}>Nombre *</Text>
                 <TextInput
                   style={styles.input}
                   value={editForm.nombre}
                   onChangeText={(t) => setEditForm({ ...editForm, nombre: t })}
                   placeholder="Nombre del medicamento"
-                  placeholderTextColor="#9CA3AF"
                 />
-                <Text style={styles.label}>Presentación</Text>
+                <Text style={[styles.label, { fontSize: 13 }]}>Presentación</Text>
                 <TextInput
                   style={styles.input}
                   value={editForm.presentacion}
                   onChangeText={(t) => setEditForm({ ...editForm, presentacion: t })}
                   placeholder="Ej: Tabletas 500mg"
-                  placeholderTextColor="#9CA3AF"
                 />
-                <Text style={styles.label}>Categoría</Text>
+                <Text style={[styles.label, { fontSize: 13 }]}>Categoría</Text>
                 <CategoriaPicker
                   value={editForm.categoria}
                   onChange={async (text) => {
                     setEditForm({ ...editForm, categoria: text });
-                    // Auto-asignar ubicación cuando se selecciona categoría
                     const ubicacion = await obtenerUbicacionDesdeCategoria(text);
-                    if (ubicacion) {
-                      setEditForm((prev) => ({ ...prev, ubicacion: ubicacion }));
-                    }
-                  }}
-                  onUbicacionChange={(ubicacion) => {
                     if (ubicacion) {
                       setEditForm((prev) => ({ ...prev, ubicacion: ubicacion }));
                     }
@@ -1209,37 +1094,66 @@ export default function InventoryScreen({ user }) {
                 />
                 <View style={styles.row}>
                   <View style={[styles.inputGroup, { flex: 1, marginRight: 10 }]}>
-                    <Text style={styles.label}>Cantidad *</Text>
+                    <Text style={[styles.label, { fontSize: 13 }]}>Cantidad *</Text>
                     <TextInput
                       style={styles.input}
                       value={editForm.cantidad}
                       onChangeText={(t) => setEditForm({ ...editForm, cantidad: t })}
-                      placeholder="Ej: 50"
-                      placeholderTextColor="#9CA3AF"
                       keyboardType="numeric"
+                      placeholder="Ej: 50"
                     />
                   </View>
                   <View style={[styles.inputGroup, { flex: 1 }]}>
-                    <Text style={styles.label}>Vencimiento *</Text>
+                    <Text style={[styles.label, { fontSize: 13 }]}>Vencimiento *</Text>
                     <DatePickerInput
                       label=""
                       value={editForm.vencimiento}
                       onChange={(date) => setEditForm({ ...editForm, vencimiento: date })}
-                      placeholder="Seleccionar fecha"
                       required={true}
                     />
                   </View>
                 </View>
-                <Text style={styles.label}>Ubicación</Text>
+                <Text style={[styles.label, { fontSize: 13 }]}>Ubicación</Text>
                 <TextInput
                   style={styles.input}
                   value={editForm.ubicacion}
                   onChangeText={(t) => setEditForm({ ...editForm, ubicacion: t })}
                   placeholder="Ej: Estante A3"
-                  placeholderTextColor="#9CA3AF"
                 />
+
+                <View style={styles.mediaButtonsRow}>
+                  <TouchableOpacity
+                    style={styles.audioButton}
+                    onPress={() => playAudio(editForm.audio)}
+                  >
+                    <Mic color="#7C3AED" size={18} />
+                    <Text style={[styles.audioButtonText, { fontSize: 12 }]}>Escuchar audio</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.cameraButton}
+                    onPress={() => tomarFoto('camera', setEditForm, editForm)}
+                  >
+                    <Camera color="#7C3AED" size={18} />
+                    <Text style={[styles.cameraButtonText, { fontSize: 12 }]}>Cámara</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.galleryButton}
+                    onPress={() => tomarFoto('gallery', setEditForm, editForm)}
+                  >
+                    <ImageIcon color="#7C3AED" size={18} />
+                    <Text style={[styles.galleryButtonText, { fontSize: 12 }]}>Galería</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {editForm.imagen && (
+                  <Image
+                    source={{ uri: `data:image/jpeg;base64,${editForm.imagen}` }}
+                    style={styles.editImagePreview}
+                  />
+                )}
+
                 <TouchableOpacity style={styles.saveButton} onPress={handleSaveEdit}>
-                  <Text style={styles.saveButtonText}>Guardar Cambios</Text>
+                  <Text style={[styles.saveButtonText, { fontSize: 15 }]}>Guardar Cambios</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -1247,7 +1161,122 @@ export default function InventoryScreen({ user }) {
         </View>
       </Modal>
 
-      {/* Modal de Duplicar */}
+      {/* MODAL DE REACTIVAR */}
+      <Modal
+        visible={reactivarModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setReactivarModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior="padding"
+            style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+          >
+            <ScrollView
+              style={styles.modalContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { fontSize: 17 }]}>Reactivar Medicamento</Text>
+                <TouchableOpacity onPress={() => setReactivarModalVisible(false)}>
+                  <X color="#6B7280" size={24} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.modalBody}>
+                <Text style={[styles.label, { fontSize: 13 }]}>Nombre *</Text>
+                <TextInput
+                  style={styles.input}
+                  value={reactivarForm.nombre}
+                  onChangeText={(t) => setReactivarForm({ ...reactivarForm, nombre: t })}
+                  placeholder="Nombre del medicamento"
+                />
+                <Text style={[styles.label, { fontSize: 13 }]}>Presentación</Text>
+                <TextInput
+                  style={styles.input}
+                  value={reactivarForm.presentacion}
+                  onChangeText={(t) => setReactivarForm({ ...reactivarForm, presentacion: t })}
+                  placeholder="Ej: Tabletas 500mg"
+                />
+                <Text style={[styles.label, { fontSize: 13 }]}>Categoría</Text>
+                <CategoriaPicker
+                  value={reactivarForm.categoria}
+                  onChange={async (text) => {
+                    setReactivarForm({ ...reactivarForm, categoria: text });
+                    const ubicacion = await obtenerUbicacionDesdeCategoria(text);
+                    if (ubicacion) {
+                      setReactivarForm((prev) => ({ ...prev, ubicacion: ubicacion }));
+                    }
+                  }}
+                  placeholder="Seleccionar categoría"
+                  showLabel={false}
+                />
+                <View style={styles.row}>
+                  <View style={[styles.inputGroup, { flex: 1, marginRight: 10 }]}>
+                    <Text style={[styles.label, { fontSize: 13 }]}>Cantidad *</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={reactivarForm.cantidad}
+                      onChangeText={(t) => setReactivarForm({ ...reactivarForm, cantidad: t })}
+                      keyboardType="numeric"
+                      placeholder="Ej: 50"
+                    />
+                  </View>
+                  <View style={[styles.inputGroup, { flex: 1 }]}>
+                    <Text style={[styles.label, { fontSize: 13 }]}>Vencimiento *</Text>
+                    <DatePickerInput
+                      label=""
+                      value={reactivarForm.vencimiento}
+                      onChange={(date) => setReactivarForm({ ...reactivarForm, vencimiento: date })}
+                      required={true}
+                    />
+                  </View>
+                </View>
+                <Text style={[styles.label, { fontSize: 13 }]}>Ubicación</Text>
+                <TextInput
+                  style={styles.input}
+                  value={reactivarForm.ubicacion}
+                  onChangeText={(t) => setReactivarForm({ ...reactivarForm, ubicacion: t })}
+                  placeholder="Ej: Estante A3"
+                />
+
+                <View style={styles.mediaButtonsRow}>
+                  <TouchableOpacity
+                    style={styles.cameraButton}
+                    onPress={() => tomarFoto('camera', setReactivarForm, reactivarForm)}
+                  >
+                    <Camera color="#7C3AED" size={18} />
+                    <Text style={[styles.cameraButtonText, { fontSize: 12 }]}>Cambiar foto</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.galleryButton}
+                    onPress={() => tomarFoto('gallery', setReactivarForm, reactivarForm)}
+                  >
+                    <ImageIcon color="#7C3AED" size={18} />
+                    <Text style={[styles.galleryButtonText, { fontSize: 12 }]}>Galería</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {reactivarForm.imagen && (
+                  <Image
+                    source={{ uri: `data:image/jpeg;base64,${reactivarForm.imagen}` }}
+                    style={styles.editImagePreview}
+                  />
+                )}
+
+                <TouchableOpacity style={styles.saveButton} onPress={handleSaveReactivar}>
+                  <Text style={[styles.saveButtonText, { fontSize: 15 }]}>
+                    Reactivar Medicamento
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* MODAL DE DUPLICAR */}
       <Modal
         visible={duplicateModalVisible}
         animationType="slide"
@@ -1265,29 +1294,27 @@ export default function InventoryScreen({ user }) {
               keyboardShouldPersistTaps="handled"
             >
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Duplicar Medicamento</Text>
+                <Text style={[styles.modalTitle, { fontSize: 17 }]}>Duplicar Medicamento</Text>
                 <TouchableOpacity onPress={() => setDuplicateModalVisible(false)}>
                   <X color="#6B7280" size={24} />
                 </TouchableOpacity>
               </View>
               <View style={styles.modalBody}>
-                <Text style={styles.label}>Nombre *</Text>
+                <Text style={[styles.label, { fontSize: 13 }]}>Nombre *</Text>
                 <TextInput
                   style={styles.input}
                   value={duplicateForm.nombre}
                   onChangeText={(t) => setDuplicateForm({ ...duplicateForm, nombre: t })}
                   placeholder="Nombre del medicamento"
-                  placeholderTextColor="#9CA3AF"
                 />
-                <Text style={styles.label}>Presentación</Text>
+                <Text style={[styles.label, { fontSize: 13 }]}>Presentación</Text>
                 <TextInput
                   style={styles.input}
                   value={duplicateForm.presentacion}
                   onChangeText={(t) => setDuplicateForm({ ...duplicateForm, presentacion: t })}
                   placeholder="Ej: Tabletas 500mg"
-                  placeholderTextColor="#9CA3AF"
                 />
-                <Text style={styles.label}>Categoría</Text>
+                <Text style={[styles.label, { fontSize: 13 }]}>Categoría</Text>
                 <CategoriaPicker
                   value={duplicateForm.categoria}
                   onChange={async (text) => {
@@ -1297,52 +1324,84 @@ export default function InventoryScreen({ user }) {
                       setDuplicateForm((prev) => ({ ...prev, ubicacion: ubicacion }));
                     }
                   }}
-                  onUbicacionChange={(ubicacion) => {
-                    if (ubicacion) {
-                      setEditForm((prev) => ({ ...prev, ubicacion: ubicacion }));
-                    }
-                  }}
                   placeholder="Seleccionar categoría"
                   showLabel={false}
                 />
-                <Text style={styles.label}>Ubicación</Text>
+                <Text style={[styles.label, { fontSize: 13 }]}>Ubicación</Text>
                 <TextInput
                   style={styles.input}
                   value={duplicateForm.ubicacion}
                   onChangeText={(t) => setDuplicateForm({ ...duplicateForm, ubicacion: t })}
                   placeholder="Ej: Estante A3"
-                  placeholderTextColor="#9CA3AF"
                 />
                 <View style={styles.row}>
                   <View style={[styles.inputGroup, { flex: 1, marginRight: 10 }]}>
-                    <Text style={styles.label}>Cantidad *</Text>
+                    <Text style={[styles.label, { fontSize: 13 }]}>Cantidad *</Text>
                     <TextInput
                       style={styles.input}
                       value={duplicateForm.cantidad}
                       onChangeText={(t) => setDuplicateForm({ ...duplicateForm, cantidad: t })}
-                      placeholder="Ej: 50"
-                      placeholderTextColor="#9CA3AF"
                       keyboardType="numeric"
+                      placeholder="Ej: 50"
                     />
                   </View>
                   <View style={[styles.inputGroup, { flex: 1 }]}>
-                    <Text style={styles.label}>Vencimiento *</Text>
+                    <Text style={[styles.label, { fontSize: 13 }]}>Vencimiento *</Text>
                     <DatePickerInput
                       label=""
                       value={duplicateForm.vencimiento}
                       onChange={(date) => setDuplicateForm({ ...duplicateForm, vencimiento: date })}
-                      placeholder="Seleccionar fecha"
                       required={true}
                     />
                   </View>
                 </View>
                 <TouchableOpacity style={styles.saveButton} onPress={handleSaveDuplicate}>
-                  <Text style={styles.saveButtonText}>Duplicar Medicamento</Text>
+                  <Text style={[styles.saveButtonText, { fontSize: 15 }]}>
+                    Duplicar Medicamento
+                  </Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
           </KeyboardAvoidingView>
         </View>
+      </Modal>
+
+      {/* MODAL DE IMAGEN CON ZOOM */}
+      <Modal
+        visible={imageModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeImageModal}
+      >
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <View style={styles.imageModalContainer}>
+            <TouchableOpacity style={styles.imageModalCloseButton} onPress={closeImageModal}>
+              <X color="white" size={28} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.imageModalShareButton} onPress={shareImage}>
+              <Share2 color="white" size={24} />
+            </TouchableOpacity>
+
+            <GestureDetector gesture={composed}>
+              <Animated.View style={[styles.imageModalWrapper, { transform: [{ scale }] }]}>
+                {selectedImage ? (
+                  <Image
+                    source={{ uri: `data:image/jpeg;base64,${selectedImage}` }}
+                    style={{ width: width, height: height * 0.7 }} // ✅ dimensiones explícitas
+                    resizeMode="contain"
+                    onLoad={() => console.log('✅ Imagen cargada')}
+                    onError={(e) => console.log('❌ Error imagen:', e.nativeEvent.error)}
+                  />
+                ) : (
+                  <Text style={{ color: 'white' }}>Sin imagen</Text>
+                )}
+              </Animated.View>
+            </GestureDetector>
+            <Text style={styles.imageModalHint}>
+              Pellizca para zoom · Doble toque para resetear
+            </Text>
+          </View>
+        </GestureHandlerRootView>
       </Modal>
     </View>
   );
@@ -1350,8 +1409,8 @@ export default function InventoryScreen({ user }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
-  loadingText: { marginTop: 10, fontSize: 14, color: '#6B7280' },
+  content: { flex: 1, padding: 16 },
+
   header: {
     backgroundColor: 'white',
     padding: 16,
@@ -1365,35 +1424,54 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 12,
     marginBottom: 12,
+    gap: 8,
   },
   searchIcon: { marginRight: 8 },
   searchInput: { flex: 1, paddingVertical: 12, fontSize: 16, color: '#1F2937' },
-  headerButtons: { flexDirection: 'row', gap: 8 },
+  searchButtonSmall: {
+    backgroundColor: '#7C3AED',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchButtonSmallText: { color: 'white', fontWeight: '600', fontSize: 12 },
+
+  headerButtons: { flexDirection: 'row', gap: 8, marginTop: 8 },
   filterButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F3F4F6',
-    padding: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderRadius: 8,
     gap: 8,
   },
-  filterButtonText: { color: '#7C3AED', fontWeight: '600' },
+  filterButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 14 },
   inactivosButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F3F4F6',
-    padding: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderRadius: 8,
     gap: 8,
   },
   inactivosButtonActive: { backgroundColor: '#6B7280' },
-  inactivosButtonText: { color: '#6B7280', fontWeight: '600' },
+  inactivosButtonText: { color: '#6B7280', fontWeight: '600', fontSize: 14 },
   inactivosButtonTextActive: { color: 'white' },
-  filtersContainer: { backgroundColor: 'white', paddingHorizontal: 16, paddingBottom: 12 },
+
+  filtersContainer: {
+    backgroundColor: 'white',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    marginTop: 8,
+  },
   filterChip: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -1402,9 +1480,9 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   filterChipActive: { backgroundColor: '#7C3AED' },
-  filterChipText: { color: '#4B5563', fontWeight: '500' },
+  filterChipText: { color: '#4B5563', fontWeight: '500', fontSize: 13 },
   filterChipTextActive: { color: 'white' },
-  content: { flex: 1, padding: 16 },
+
   resultsHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1422,136 +1500,50 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   pdfButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 12 },
+
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: { marginTop: 10, fontSize: 14, color: '#6B7280' },
+
   emptyContainer: { alignItems: 'center', paddingVertical: 40 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginTop: 16 },
   emptyText: { fontSize: 14, color: '#9CA3AF', marginTop: 8, textAlign: 'center' },
-  card: { backgroundColor: 'white', borderRadius: 16, marginBottom: 16, padding: 16, elevation: 2 },
-  cardInactivo: { opacity: 0.7, backgroundColor: '#E5E7EB' },
-  vigente: { borderLeftWidth: 4, borderLeftColor: '#22C55E' },
-  porVencer: { borderLeftWidth: 4, borderLeftColor: '#EA580C' },
-  vencido: { borderLeftWidth: 4, borderLeftColor: '#DC2626' },
-  cardContent: { flex: 1 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-  medInfo: { flex: 1 },
-  medName: { fontSize: 18, fontWeight: 'bold', color: '#1F2937', marginBottom: 4 },
-  medPresentation: { fontSize: 14, color: '#6B7280', marginBottom: 2 },
-  medCategory: { fontSize: 12, color: '#9CA3AF' },
-  medUbicacion: { fontSize: 12, color: '#10B981', marginTop: 4 },
-  medUser: { fontSize: 10, color: '#7C3AED', fontStyle: 'italic', marginTop: 4 },
-  medImage: { width: 60, height: 60, borderRadius: 8, marginLeft: 12 },
-  zoomHint: {
-    position: 'absolute',
-    bottom: 2,
-    right: 2,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    borderRadius: 6,
-    padding: 2,
-  },
-  medDetails: { marginBottom: 12 },
-  quantityContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  quantityLabel: { fontSize: 14, color: '#6B7280' },
-  quantityValue: { fontSize: 16, fontWeight: 'bold', color: '#1F2937' },
-  expiryContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  expiryLabel: { fontSize: 14, color: '#6B7280' },
-  expiryValue: { fontSize: 14, color: '#4B5563' },
-  statusContainer: { alignItems: 'flex-end', marginBottom: 8 },
-  statusBadge: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
-  statusText: { fontSize: 12, fontWeight: 'bold' },
-  fechaBaja: { fontSize: 11, color: '#9CA3AF', fontStyle: 'italic', marginTop: 4 },
-  actionButtons: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-    paddingTop: 8,
-  },
-  editButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
+
+  historyCardCompact: {
+    backgroundColor: 'white',
+    marginBottom: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
     borderRadius: 8,
-    gap: 6,
-    backgroundColor: '#EDE9FE',
+    elevation: 0.5,
+    borderLeftWidth: 3,
   },
-  editButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 14 },
-  duplicateButton: {
-    flex: 1,
+  cardRowCompact: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-    borderRadius: 8,
-    gap: 6,
-    backgroundColor: '#FEF3C7',
-  },
-  duplicateButtonText: { color: '#EA580C', fontWeight: '600', fontSize: 14 },
-  deleteButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-    borderRadius: 8,
-    gap: 6,
-    backgroundColor: '#FEE2E2',
-  },
-  deleteButtonText: { color: '#DC2626', fontWeight: '600' },
-  reactivarButton: {
-    flex: 1,
-    backgroundColor: '#10B981',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-    borderRadius: 8,
-  },
-  reactivarButtonText: { color: 'white', fontWeight: '600' },
-  loadingMore: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 16,
-    gap: 8,
-  },
-  loadingMoreText: { fontSize: 12, color: '#6B7280' },
-  loadMoreButton: {
-    backgroundColor: '#F3F4F6',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  loadMoreText: { color: '#7C3AED', fontWeight: '600' },
-  endOfListText: {
-    textAlign: 'center',
-    color: '#9CA3AF',
-    fontSize: 12,
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  modalContainer: { flex: 1, backgroundColor: 'rgba(173, 20, 196, 0.14)' },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 50,
-    paddingBottom: 12,
+    alignItems: 'center',
+    marginBottom: 2,
+    flexWrap: 'wrap',
+    gap: 4,
   },
-  modalTitle: { color: 'white', fontSize: 16, fontWeight: 'bold', flex: 1, marginRight: 12 },
-  modalActions: { flexDirection: 'row', gap: 4 },
-  modalActionBtn: { padding: 8 },
-  modalImageWrapper: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  modalImage: { width: '100%', height: '100%' },
-  modalHint: {
-    color: 'rgba(255,255,255,0.35)',
-    fontSize: 12,
-    textAlign: 'center',
-    paddingBottom: 24,
+  medicamentoContainerCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flex: 1,
   },
+  medicamentoTextCompact: { fontSize: 10, fontWeight: '600', color: '#1F2937', flex: 1 },
+  cantidadTextCompact: { fontSize: 9, fontWeight: 'bold', color: '#7C3AED' },
+  categoriaTextCompact: { fontSize: 8, color: '#6B7280' },
+  statusBadgeCompact: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
+  statusTextCompact: { fontSize: 8, fontWeight: '600' },
+  ubicacionTextCompact: { fontSize: 8, color: '#10B981', marginLeft: 4 },
+
+  // Modales
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1566,37 +1558,161 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   modalHeader: {
-    backgroundColor: '#cfbef9',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
+    justifyContent: 'space-between',
+    padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#1F2937' },
-  modalBody: { padding: 20 },
-  label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 5 },
+  modalTitle: { fontWeight: 'bold', color: '#1F2937' },
+  modalBody: { padding: 16 },
+  label: { fontWeight: '600', color: '#374151', marginBottom: 4, fontSize: 13 },
   input: {
     borderWidth: 1,
     borderColor: '#D1D5DB',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 16,
-    marginBottom: 16,
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    marginBottom: 12,
     color: '#1F2937',
   },
-  row: { flexDirection: 'row', marginBottom: 16 },
+  row: { flexDirection: 'row', marginBottom: 12, gap: 12 },
   inputGroup: { marginBottom: 0 },
   saveButton: {
     backgroundColor: '#7C3AED',
-    padding: 16,
+    paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 16,
   },
-  saveButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
-  modalCloseButton: {
+  saveButtonText: { color: 'white', fontWeight: 'bold' },
+
+  detailModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    width: '90%',
+    maxHeight: '85%',
+    overflow: 'hidden',
+  },
+  detailModalBody: { padding: 20 },
+  detailRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' },
+  detailLabel: { fontWeight: '600', color: '#374151', marginLeft: 8, width: 100 },
+  detailValue: { color: '#1F2937', flex: 1 },
+  detailImage: { width: 50, height: 50, borderRadius: 8, marginRight: 12 },
+  imagePreviewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+    padding: 10,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+  },
+  imagePreviewText: { color: '#7C3AED', marginLeft: 8 },
+  detailButtons: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginTop: 10 },
+  editDetailButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    gap: 4,
+    backgroundColor: '#EDE9FE',
+  },
+  editDetailButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 12 },
+  duplicateDetailButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    gap: 4,
+    backgroundColor: '#FEF3C7',
+  },
+  duplicateDetailButtonText: { color: '#EA580C', fontWeight: '600', fontSize: 12 },
+  deleteDetailButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    gap: 4,
+    backgroundColor: '#FEE2E2',
+  },
+  deleteDetailButtonText: { color: '#DC2626', fontWeight: '600', fontSize: 12 },
+  reactivarDetailButton: {
+    flex: 1,
+    backgroundColor: '#10B981',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+  reactivarDetailButtonText: { color: 'white', fontWeight: '600', fontSize: 12 },
+
+  mediaButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 16,
+  },
+  audioButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+    backgroundColor: '#EDE9FE',
+  },
+  audioButtonText: { color: '#7C3AED', fontWeight: '600', fontSize: 12 },
+  cameraButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+    backgroundColor: '#E0E7FF',
+  },
+  cameraButtonText: { color: '#4338CA', fontWeight: '600', fontSize: 12 },
+  galleryButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+    backgroundColor: '#F3E8FF',
+  },
+  galleryButtonText: { color: '#9333EA', fontWeight: '600', fontSize: 12 },
+  editImagePreview: {
+    width: 70,
+    height: 70,
+    borderRadius: 8,
+    marginBottom: 16,
+    alignSelf: 'center',
+  },
+
+  imageModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageModalCloseButton: {
     position: 'absolute',
     top: 50,
     right: 20,
@@ -1604,13 +1720,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     borderRadius: 30,
     padding: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
   },
-  modalShareButton: {
+  imageModalShareButton: {
     position: 'absolute',
     top: 50,
     left: 20,
@@ -1618,25 +1729,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     borderRadius: 30,
     padding: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
   },
-  filtroExactoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#EDE9FE',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  filtroExactoText: {
+  imageModalWrapper: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  imageModalImage: { width: '100%', height: '100%' },
+  imageModalHint: {
+    color: 'rgba(255,255,255,0.35)',
     fontSize: 12,
-    color: '#7C3AED',
-    fontWeight: '500',
+    textAlign: 'center',
+    paddingBottom: 24,
   },
 });
