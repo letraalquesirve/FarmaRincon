@@ -222,6 +222,7 @@ export default function App() {
                 options={{
                   title: 'Inventario',
                   tabBarIcon: ({ color, size }) => <Package color={color} size={size} />,
+                  unmountOnBlur: true, // ← AÑADIR ESTO - Desmonta la pantalla cuando sales
                 }}
               >
                 {(props) => <InventoryScreen {...props} user={user} />}
