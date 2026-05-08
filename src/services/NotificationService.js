@@ -102,3 +102,112 @@ export async function getAllScheduledNotifications() {
 export function addNotificationListener(callback) {
   return Notifications.addNotificationResponseReceivedListener(callback);
 }
+
+// ============================================
+// NUEVAS FUNCIONES PARA PUSH NOTIFICATIONS
+// ============================================
+
+// Configurar canal de notificaciones para Android (requerido para Android 8+)
+export const setupNotificationChannel = async () => {
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'Default',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#7C3AED',
+    });
+    console.log('✅ Canal de notificaciones configurado');
+  }
+};
+
+// Registrar el dispositivo para recibir push notifications
+export const registerForPushNotifications = async (userId, pb) => {
+  try {
+    // 1. Verificar permisos
+    const hasPermission = await requestPermissions();
+    if (!hasPermission) return null;
+
+    // 2. Obtener projectId desde Constants
+    const Constants = require('expo-constants').default;
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+
+    if (!projectId) {
+      console.error('❌ No se encontró projectId en expoConfig');
+      return null;
+    }
+
+    // 3. Configurar canal para Android
+    await setupNotificationChannel();
+
+    // 4. Obtener el token push de Expo
+    const tokenData = await Notifications.getExpoPushTokenAsync({
+      projectId: projectId,
+    });
+
+    const token = tokenData.data;
+    console.log('📱 Expo Push Token:', token);
+
+    // 5. Guardar token en PocketBase
+    if (pb && userId) {
+      // Verificar si ya existe un token para este dispositivo
+      const existingTokens = await pb.collection('push_tokens').getList(1, 1, {
+        filter: `token = "${token}"`,
+      });
+
+      if (existingTokens.items.length === 0) {
+        await pb.collection('push_tokens').create({
+          user_id: userId,
+          token: token,
+          platform: Platform.OS,
+          active: true,
+        });
+        console.log('✅ Token guardado en PocketBase');
+      } else {
+        // Actualizar si es necesario
+        if (!existingTokens.items[0].active) {
+          await pb.collection('push_tokens').update(existingTokens.items[0].id, {
+            active: true,
+          });
+          console.log('✅ Token reactivado');
+        } else {
+          console.log('ℹ️ Token ya existente en PocketBase');
+        }
+      }
+    }
+
+    return token;
+  } catch (error) {
+    console.error('❌ Error registrando push notifications:', error);
+    return null;
+  }
+};
+
+// Enviar notificación push a un token específico
+export const sendPushNotification = async (expoPushToken, title, body, data = {}) => {
+  try {
+    const message = {
+      to: expoPushToken,
+      sound: 'default',
+      title: title,
+      body: body,
+      data: data,
+      priority: 'high', // Importante para Android
+    };
+
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    });
+
+    const result = await response.json();
+    console.log('📤 Push notification sent:', result);
+    return result;
+  } catch (error) {
+    console.error('❌ Error sending push notification:', error);
+    return null;
+  }
+};
