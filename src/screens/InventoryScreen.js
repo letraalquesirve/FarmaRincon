@@ -30,7 +30,7 @@ import * as Sharing from 'expo-sharing';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { pb } from '../services/PocketBaseConfig';
 
 // Components
@@ -341,7 +341,7 @@ export default function InventoryScreen({ user }) {
       }
       const uri = `${FileSystem.cacheDirectory}temp_audio_${Date.now()}.mp3`;
       await FileSystem.writeAsStringAsync(uri, audioBase64, {
-        encoding: FileSystem.EncodingType.Base64,
+        encoding: 'base64',
       });
       const { sound } = await Audio.Sound.createAsync({ uri });
       setAudioSound(sound);

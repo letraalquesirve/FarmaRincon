@@ -17,6 +17,7 @@ import { X, Mic, Camera, Image as ImageIcon } from 'lucide-react-native';
 import { LoadingButton } from '../common/LoadingButton';
 import DatePickerInput from '../DatePickerInput';
 import CategoriaPicker from '../CategoriaPicker';
+import { formatDate } from '../../utils/dateUtils';
 
 export const EditMedicationModal = ({
   visible,
@@ -41,18 +42,45 @@ export const EditMedicationModal = ({
 
   useEffect(() => {
     if (medication && visible) {
+      // Extraer solo YYYY-MM-DD
+      let fechaLimpia = '';
+      if (medication.vencimiento) {
+        fechaLimpia = medication.vencimiento.split('T')[0];
+      }
       setForm({
         nombre: medication.nombre || '',
         presentacion: medication.presentacion || '',
         categoria: medication.categoria || '',
         cantidad: medication.cantidad ? medication.cantidad.toString() : '',
-        vencimiento: medication.vencimiento || '',
+        vencimiento: fechaLimpia,
         ubicacion: medication.ubicacion || '',
         imagen: medication.imagen || null,
         audio: medication.audio || null,
       });
     }
   }, [medication, visible]);
+
+  // Función para normalizar la fecha a YYYY-MM-DD
+  const normalizeDate = (date) => {
+    if (!date) return '';
+
+    // Si ya es string en formato YYYY-MM-DD
+    if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      return date;
+    }
+
+    // Si es string con formato ISO
+    if (typeof date === 'string' && date.includes('T')) {
+      return date.split('T')[0];
+    }
+
+    // Si es objeto Date
+    if (date instanceof Date && !isNaN(date)) {
+      return date.toISOString().split('T')[0];
+    }
+
+    return '';
+  };
 
   const handleSave = async () => {
     if (!form.nombre.trim()) {
@@ -146,7 +174,10 @@ export const EditMedicationModal = ({
                   <DatePickerInput
                     label=""
                     value={form.vencimiento}
-                    onChange={(date) => setForm({ ...form, vencimiento: date })}
+                    onChange={(date) => {
+                      console.log('📅 Fecha seleccionada:', date);
+                      setForm({ ...form, vencimiento: date });
+                    }}
                     required={true}
                   />
                 </View>
