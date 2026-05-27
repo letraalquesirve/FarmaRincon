@@ -31,7 +31,9 @@ import PedidosScreen from './src/screens/PedidosScreen';
 import EntregasScreen from './src/screens/EntregasScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
 import LoginModal from './src/components/LoginModal';
-import { registerForPushNotifications } from './src/services/NotificationService';
+
+// ❌ NOTIFICACIONES PUSH COMENTADAS (offline-first)
+// import { registerForPushNotifications } from './src/services/NotificationService';
 
 LogBox.ignoreLogs(['Setting a timer for a long period of time']);
 
@@ -126,7 +128,6 @@ export default function App() {
     }
   };
 
-  // Dentro de handleLogin, después de setUser(userData) y antes de setIsLoggedIn(true):
   const handleLogin = async (username) => {
     try {
       const result = await pb.collection('usuarios').getList(1, 1, {
@@ -142,8 +143,8 @@ export default function App() {
       const userData = result.items[0];
       setUser(userData);
 
-      // ✅ REGISTRAR PARA PUSH NOTIFICATIONS (NUEVO)
-      await registerForPushNotifications(userData.id, pb);
+      // ❌ NOTIFICACIONES PUSH COMENTADAS
+      // await registerForPushNotifications(userData.id, pb);
 
       setIsLoggedIn(true);
       await AsyncStorage.setItem('currentUser', JSON.stringify(userData));
@@ -227,7 +228,7 @@ export default function App() {
                 options={{
                   title: 'Inventario',
                   tabBarIcon: ({ color, size }) => <Package color={color} size={size} />,
-                  unmountOnBlur: true, // ← AÑADIR ESTO - Desmonta la pantalla cuando sales
+                  unmountOnBlur: true,
                 }}
               >
                 {(props) => <InventoryScreen {...props} user={user} />}

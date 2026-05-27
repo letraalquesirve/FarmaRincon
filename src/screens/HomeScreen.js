@@ -22,10 +22,14 @@ import {
   ClipboardList,
   MinusCircle,
   LogOut,
+  Upload,
+  Download,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry, formatDate, getExpiryCategory } from '../utils/dateUtils';
 import { pb } from '../services/PocketBaseConfig';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { loadFromVPS, saveToVPS, hasLocalData } from '../services/SyncService';
+import { initDatabase, checkTablesStatus, exportDatabaseToFile } from '../services/SQLiteService';
 
 export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const navigation = useNavigation();
@@ -37,6 +41,7 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
+  const [syncing, setSyncing] = useState(false); // Estado para sincronización
 
   // Estados para las listas filtradas
   const [porVencerList, setPorVencerList] = useState([]);
@@ -51,6 +56,76 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const [showVencidos, setShowVencidos] = useState(false);
   const [showPedidosPendientes, setShowPedidosPendientes] = useState(false);
   const [showEntregasAbiertas, setShowEntregasAbiertas] = useState(false);
+
+  // ─────────────────────────────────────────────────────────────
+  // FUNCIONES DE SINCRONIZACIÓN
+  // ─────────────────────────────────────────────────────────────
+
+  // Cargar BD desde el servidor
+  const handleLoadFromServer = async () => {
+    if (syncing) return;
+
+    Alert.alert(
+      'Cargar desde servidor',
+      '¿Estás seguro? Esto reemplazará TODOS los datos locales con la versión del servidor.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Cargar',
+          style: 'destructive',
+          onPress: async () => {
+            setSyncing(true);
+            try {
+              await loadFromVPS(user?.nombre || 'usuario', (mensaje) => {
+                console.log('📡 Sync:', mensaje);
+              });
+              Alert.alert('Éxito', 'Base de datos cargada desde el servidor');
+              await loadData(); // Recargar la UI
+            } catch (error) {
+              console.error('Error cargando desde servidor:', error);
+              Alert.alert('Error', 'No se pudo cargar la base de datos desde el servidor');
+            } finally {
+              setSyncing(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Guardar BD en el servidor
+  const handleSaveToServer = async () => {
+    if (syncing) return;
+
+    Alert.alert(
+      'Guardar en servidor',
+      '¿Estás seguro? Esto subirá tus datos locales al servidor, reemplazando la versión remota.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Guardar',
+          onPress: async () => {
+            setSyncing(true);
+            try {
+              await saveToVPS(user?.nombre || 'usuario', (mensaje) => {
+                console.log('📡 Sync:', mensaje);
+              });
+              Alert.alert('Éxito', 'Base de datos guardada en el servidor');
+            } catch (error) {
+              console.error('Error guardando en servidor:', error);
+              Alert.alert('Error', 'No se pudo guardar la base de datos en el servidor');
+            } finally {
+              setSyncing(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────
+  // FUNCIONES EXISTENTES (sin cambios)
+  // ─────────────────────────────────────────────────────────────
 
   // Función para filtrar medicamentos - calcula fechas frescas CADA VEZ
   const filtrarMedicamentos = useCallback((items) => {
@@ -116,15 +191,20 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
       console.log(`   📅 ${med.nombre}: ${med.vencimiento?.split('T')[0]}`);
     });
   }, []);
+
   // Cargar datos
   const loadData = async () => {
     try {
+      // Inicializar SQLite
+      await initDatabase();
+
       // Cargar medicamentos desde la vista
-      const medicamentosResult = await pb.collection('searck_key').getList(1, 100, {
-        filter: 'activo = true', // ← FILTRAR AQUÍ, no en local
+      const medicamentosResult = await pb.collection('medicamentos').getList(1, 100, {
+        filter: 'activo = true',
         sort: 'nombre',
         requestKey: null,
       });
+
       console.log('📦 Total items con sort en la respuesta:', medicamentosResult.items.length);
       console.log(
         '📦 Activos (activo === true):',
@@ -142,6 +222,7 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
       medicamentosResult.items.slice(0, 10).forEach((m) => {
         console.log(`   ${m.nombre}: activo=${m.activo} (${typeof m.activo})`);
       });
+
       // Cargar pedidos y entregas
       const [pedidosResult, entregasResult] = await Promise.all([
         pb.collection('pedidos').getList(1, 100, {
@@ -255,7 +336,7 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
             <td style="padding:8px;border:1px solid #ddd;">${med.presentacion || ''}</td>
             <td style="padding:8px;border:1px solid #ddd;text-align:center;">${med.cantidad || 0}</td>
             <td style="padding:8px;border:1px solid #ddd;text-align:center;">${formatDate(med.vencimiento)}</td>
-            </tr>`;
+           </tr>`;
       });
       const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
         <style>body{font-family:Arial;padding:20px}th{background:#7C3AED;color:white;padding:8px;}</style></head>
@@ -298,6 +379,38 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
         <TouchableOpacity style={styles.userBadge} onPress={handleUserPress}>
           <Text style={styles.userName}>👤 {user?.nombre || 'Usuario'}</Text>
           <LogOut color="white" size={18} />
+        </TouchableOpacity>
+      </View>
+
+      {/* ✅ NUEVOS BOTONES DE SINCRONIZACIÓN */}
+      <View style={styles.syncButtonsContainer}>
+        <TouchableOpacity
+          style={[styles.syncButton, styles.syncButtonLoad]}
+          onPress={handleLoadFromServer}
+          disabled={syncing}
+        >
+          {syncing ? (
+            <ActivityIndicator size="small" color="white" />
+          ) : (
+            <>
+              <Download color="white" size={18} />
+              <Text style={styles.syncButtonText}>Cargar BD del Server</Text>
+            </>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.syncButton, styles.syncButtonSave]}
+          onPress={handleSaveToServer}
+          disabled={syncing}
+        >
+          {syncing ? (
+            <ActivityIndicator size="small" color="white" />
+          ) : (
+            <>
+              <Upload color="white" size={18} />
+              <Text style={styles.syncButtonText}>Salvar BD y Cerrar</Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -496,6 +609,35 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   userName: { fontSize: 12, fontWeight: '600', color: 'white' },
+
+  // ✅ NUEVOS ESTILOS PARA BOTONES DE SINCRONIZACIÓN
+  syncButtonsContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    gap: 12,
+  },
+  syncButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 8,
+  },
+  syncButtonLoad: {
+    backgroundColor: '#3B82F6',
+  },
+  syncButtonSave: {
+    backgroundColor: '#10B981',
+  },
+  syncButtonText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', padding: 12, gap: 12 },
   statCard: {
     flex: 1,
