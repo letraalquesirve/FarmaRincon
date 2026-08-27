@@ -160,6 +160,15 @@ export const importDatabaseFromFile = async (fileUri) => {
     await dbInstance.closeAsync();
     db = null;
     const sqlitePath = `${FileSystem.documentDirectory}SQLite/farmacia.db`;
+
+    // FileSystem.copyAsync falla si el destino ya existe (y farmacia.db
+    // SIEMPRE existe, porque initDatabase() ya lo creó al arrancar la app).
+    // Hay que borrar el archivo destino (y sus sidecars de WAL, si los hay)
+    // antes de copiar encima.
+    for (const suffix of ['', '-wal', '-shm']) {
+      await FileSystem.deleteAsync(`${sqlitePath}${suffix}`, { idempotent: true });
+    }
+
     await FileSystem.copyAsync({
       from: fileUri,
       to: sqlitePath,

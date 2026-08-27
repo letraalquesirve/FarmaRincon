@@ -100,6 +100,7 @@ export const uploadToVPS = async (localUri, usuario) => {
 export const downloadFromVPS = async (fileUrl) => {
   try {
     const localPath = `${FileSystem.documentDirectory}downloaded_backup.sql`;
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
     const downloadResult = await FileSystem.downloadAsync(fileUrl, localPath);
 
     if (downloadResult.status === 200) {
