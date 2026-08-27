@@ -39,7 +39,13 @@ import DatePickerInput from '../components/DatePickerInput';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import CategoriaPicker from '../components/CategoriaPicker';
-import { pb } from '../services/PocketBaseConfig';
+import {
+  medicamentosList,
+  medicamentoCreate,
+  medicamentoUpdate,
+  historyCreate,
+  categoriaGetByNombre,
+} from '../services/LocalDataService';
 
 export default function RegisterScreen({ user }) {
   // ==================== ESTADOS PRINCIPALES ====================
@@ -140,14 +146,8 @@ export default function RegisterScreen({ user }) {
   const obtenerUbicacionDesdeCategoria = async (categoriaNombre) => {
     if (!categoriaNombre || categoriaNombre.trim() === '') return '';
     try {
-      const result = await pb.collection('categorias').getList(1, 1, {
-        filter: `nombre = "${categoriaNombre}"`,
-        requestKey: null,
-      });
-      if (result.items && result.items.length > 0 && result.items[0].ubicacion) {
-        return result.items[0].ubicacion;
-      }
-      return '';
+      const categoria = await categoriaGetByNombre(categoriaNombre);
+      return categoria?.ubicacion || '';
     } catch (error) {
       console.error('Error obteniendo ubicación de categoría:', error);
       return '';
@@ -156,12 +156,13 @@ export default function RegisterScreen({ user }) {
 
   const registrarHistory = async (idMed, fecha, user, movimiento, cantidad, nombreMed = '') => {
     try {
-      await pb.collection('history').create({
+      await historyCreate({
         id_med: idMed,
         fecha: fecha,
         user: user,
         movimiento: movimiento,
         cantidad: cantidad,
+        nombre: nombreMed,
       });
       console.log(`📝 History registrado: ${movimiento}`);
     } catch (error) {
@@ -185,8 +186,15 @@ export default function RegisterScreen({ user }) {
 
   const cargarUltimoMedicamento = async () => {
     try {
-      const result = await pb.collection('medicamentos').getList(1, 1, { sort: '-fecharegistro' });
-      setUltimoMedicamento(result.items.length > 0 ? result.items[0] : null);
+      const items = await medicamentosList();
+      if (items.length === 0) {
+        setUltimoMedicamento(null);
+        return;
+      }
+      const ultimo = [...items].sort(
+        (a, b) => new Date(b.fechaRegistro || 0) - new Date(a.fechaRegistro || 0)
+      )[0];
+      setUltimoMedicamento(ultimo);
     } catch (error) {
       console.error('Error cargando último medicamento:', error);
     }
@@ -621,14 +629,14 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
         vencimiento: medData.vencimiento,
         ubicacion: ubicacionFinal,
         imagen: imagenFinal,
-        username: userName,
-        userid: userName,
+        userName: userName,
+        userId: userName,
         activo: true,
-        fechabaja: null,
-        fecharegistro: new Date().toISOString(),
+        fechaBaja: null,
+        fechaRegistro: new Date().toISOString(),
       };
 
-      const result = await pb.collection('medicamentos').create(medDataWithUser);
+      const result = await medicamentoCreate(medDataWithUser);
       await registrarHistory(
         result.id,
         new Date().toISOString(),
@@ -685,9 +693,9 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
         vencimiento: manualFormData.vencimiento,
         ubicacion: ubicacionFinal,
         activo: true,
-        userid: userName,
-        username: userName,
-        fecharegistro: new Date().toISOString(),
+        userId: userName,
+        userName: userName,
+        fechaRegistro: new Date().toISOString(),
       };
 
       // Agregar imagen si existe (como base64)
@@ -695,14 +703,14 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
         medicamentoData.imagen = imagenFinal;
       }
 
-      // Agregar audio si existe (como base64 en campo JSON)
+      // Agregar audio si existe (como base64)
       if (audioBase64) {
-        medicamentoData.audio = audioBase64; // Guardar el base64 directamente
+        medicamentoData.audio = audioBase64;
         console.log('🎵 Audio agregado al medicamento, tamaño:', audioBase64.length);
       }
 
       // Crear el medicamento con todos los datos (incluyendo audio)
-      const result = await pb.collection('medicamentos').create(medicamentoData);
+      const result = await medicamentoCreate(medicamentoData);
       console.log('✅ Medicamento creado, ID:', result.id);
 
       // Registrar en history
@@ -809,10 +817,16 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
 
   const checkForDuplicates = async (medData) => {
     try {
-      const result = await pb.collection('medicamentos').getList(1, 1, {
-        filter: `nombre = "${medData.nombre}" && presentacion = "${medData.presentacion}"`,
-      });
-      return result.items.length > 0 ? result.items[0] : null;
+      const items = await medicamentosList();
+      const nombreNorm = (medData.nombre || '').trim().toLowerCase();
+      const presentacionNorm = (medData.presentacion || '').trim().toLowerCase();
+      return (
+        items.find(
+          (m) =>
+            (m.nombre || '').trim().toLowerCase() === nombreNorm &&
+            (m.presentacion || '').trim().toLowerCase() === presentacionNorm
+        ) || null
+      );
     } catch (error) {
       return null;
     }
@@ -820,12 +834,12 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
 
   const reactivarMedicamento = async (medId, cantidadNueva) => {
     try {
-      await pb.collection('medicamentos').update(medId, {
+      await medicamentoUpdate(medId, {
         activo: true,
         cantidad: cantidadNueva,
-        fechabaja: null,
-        fechareactivacion: new Date().toISOString(),
-        useridreactivacion: getUserName(),
+        fechaBaja: null,
+        fechaReactivacion: new Date().toISOString(),
+        reactivadoPor: getUserName(),
       });
       await cargarUltimoMedicamento();
       Alert.alert('Éxito', 'Medicamento reactivado correctamente', [

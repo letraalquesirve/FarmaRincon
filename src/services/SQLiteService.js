@@ -24,12 +24,17 @@ export const initDatabase = async () => {
       cantidad INTEGER DEFAULT 0,
       vencimiento TEXT,
       imagen TEXT,
+      audio TEXT,
       fechaRegistro TEXT,
       activo INTEGER DEFAULT 1,
       fechaBaja TEXT,
       userName TEXT,
       userId TEXT,
       ubicacion TEXT,
+      fechaEdicion TEXT,
+      editadoPor TEXT,
+      fechaReactivacion TEXT,
+      reactivadoPor TEXT,
       updated TEXT,
       _syncStatus TEXT DEFAULT 'synced',
       _pendingOp TEXT
@@ -94,6 +99,16 @@ export const initDatabase = async () => {
       _pendingOp TEXT
     );
 
+    -- Tabla de categorías (nombre -> ubicación física en la farmacia)
+    CREATE TABLE IF NOT EXISTS categorias (
+      id TEXT PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      ubicacion TEXT,
+      updated TEXT,
+      _syncStatus TEXT DEFAULT 'synced',
+      _pendingOp TEXT
+    );
+
     -- Índices para rendimiento
     CREATE INDEX IF NOT EXISTS idx_medicamentos_nombre ON medicamentos(nombre);
     CREATE INDEX IF NOT EXISTS idx_medicamentos_activo ON medicamentos(activo);
@@ -101,6 +116,7 @@ export const initDatabase = async () => {
     CREATE INDEX IF NOT EXISTS idx_entregas_estado ON entregas(estado);
     CREATE INDEX IF NOT EXISTS idx_entregas_pedidoId ON entregas(pedidoId);
     CREATE INDEX IF NOT EXISTS idx_history_fecha ON history(fecha);
+    CREATE INDEX IF NOT EXISTS idx_categorias_nombre ON categorias(nombre);
   `);
 
   console.log('✅ Base de datos SQLite inicializada');
@@ -160,6 +176,14 @@ export const importDatabaseFromFile = async (fileUri) => {
 // ─────────────────────────────────────────────────────────────
 // MEDICAMENTOS
 // ─────────────────────────────────────────────────────────────
+// Normaliza el registro que sale de SQLite (activo: 0/1 -> boolean) para que
+// el resto de la app pueda seguir comparando con === true / === false
+// exactamente como lo hacía con los datos de PocketBase.
+const normalizeMedicamento = (row) => {
+  if (!row) return row;
+  return { ...row, activo: row.activo === 1 || row.activo === true };
+};
+
 export const getAllMedicamentos = async (activo = null) => {
   const dbInstance = await getDb();
   let query = 'SELECT * FROM medicamentos';
@@ -169,12 +193,14 @@ export const getAllMedicamentos = async (activo = null) => {
     params.push(activo ? 1 : 0);
   }
   query += ' ORDER BY nombre';
-  return await dbInstance.getAllAsync(query, params);
+  const rows = await dbInstance.getAllAsync(query, params);
+  return rows.map(normalizeMedicamento);
 };
 
 export const getMedicamentoById = async (id) => {
   const dbInstance = await getDb();
-  return await dbInstance.getFirstAsync('SELECT * FROM medicamentos WHERE id = ?', [id]);
+  const row = await dbInstance.getFirstAsync('SELECT * FROM medicamentos WHERE id = ?', [id]);
+  return normalizeMedicamento(row);
 };
 
 export const saveMedicamento = async (medicamento, syncStatus = 'synced', pendingOp = null) => {
@@ -190,12 +216,17 @@ export const saveMedicamento = async (medicamento, syncStatus = 'synced', pendin
     cantidad: medicamento.cantidad || 0,
     vencimiento: medicamento.vencimiento || '',
     imagen: medicamento.imagen || null,
+    audio: medicamento.audio || null,
     fechaRegistro: medicamento.fechaRegistro || now,
     activo: medicamento.activo !== false ? 1 : 0,
     fechaBaja: medicamento.fechaBaja || null,
     userName: medicamento.userName || '',
     userId: medicamento.userId || '',
     ubicacion: medicamento.ubicacion || '',
+    fechaEdicion: medicamento.fechaEdicion || null,
+    editadoPor: medicamento.editadoPor || null,
+    fechaReactivacion: medicamento.fechaReactivacion || null,
+    reactivadoPor: medicamento.reactivadoPor || null,
     updated: now,
     _syncStatus: syncStatus,
     _pendingOp: pendingOp,
@@ -205,8 +236,9 @@ export const saveMedicamento = async (medicamento, syncStatus = 'synced', pendin
     await dbInstance.runAsync(
       `UPDATE medicamentos SET 
         nombre = ?, presentacion = ?, categoria = ?, cantidad = ?,
-        vencimiento = ?, imagen = ?, fechaRegistro = ?, activo = ?,
+        vencimiento = ?, imagen = ?, audio = ?, fechaRegistro = ?, activo = ?,
         fechaBaja = ?, userName = ?, userId = ?, ubicacion = ?,
+        fechaEdicion = ?, editadoPor = ?, fechaReactivacion = ?, reactivadoPor = ?,
         updated = ?, _syncStatus = ?, _pendingOp = ?
       WHERE id = ?`,
       [
@@ -216,12 +248,17 @@ export const saveMedicamento = async (medicamento, syncStatus = 'synced', pendin
         data.cantidad,
         data.vencimiento,
         data.imagen,
+        data.audio,
         data.fechaRegistro,
         data.activo,
         data.fechaBaja,
         data.userName,
         data.userId,
         data.ubicacion,
+        data.fechaEdicion,
+        data.editadoPor,
+        data.fechaReactivacion,
+        data.reactivadoPor,
         data.updated,
         data._syncStatus,
         data._pendingOp,
@@ -231,10 +268,11 @@ export const saveMedicamento = async (medicamento, syncStatus = 'synced', pendin
   } else {
     await dbInstance.runAsync(
       `INSERT INTO medicamentos (
-        id, nombre, presentacion, categoria, cantidad, vencimiento, imagen,
+        id, nombre, presentacion, categoria, cantidad, vencimiento, imagen, audio,
         fechaRegistro, activo, fechaBaja, userName, userId, ubicacion,
+        fechaEdicion, editadoPor, fechaReactivacion, reactivadoPor,
         updated, _syncStatus, _pendingOp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         data.id,
         data.nombre,
@@ -243,12 +281,17 @@ export const saveMedicamento = async (medicamento, syncStatus = 'synced', pendin
         data.cantidad,
         data.vencimiento,
         data.imagen,
+        data.audio,
         data.fechaRegistro,
         data.activo,
         data.fechaBaja,
         data.userName,
         data.userId,
         data.ubicacion,
+        data.fechaEdicion,
+        data.editadoPor,
+        data.fechaReactivacion,
+        data.reactivadoPor,
         data.updated,
         data._syncStatus,
         data._pendingOp,
@@ -266,19 +309,28 @@ export const deleteMedicamento = async (id) => {
 // ─────────────────────────────────────────────────────────────
 // PEDIDOS
 // ─────────────────────────────────────────────────────────────
+const normalizePedido = (row) => {
+  if (!row) return row;
+  return {
+    ...row,
+    atendido: row.atendido === 1 || row.atendido === true,
+    medicamentosSolicitados: row.medicamentosSolicitados
+      ? JSON.parse(row.medicamentosSolicitados)
+      : [],
+    entregasRealizadas: row.entregasRealizadas ? JSON.parse(row.entregasRealizadas) : [],
+  };
+};
+
 export const getAllPedidos = async () => {
   const dbInstance = await getDb();
   const result = await dbInstance.getAllAsync('SELECT * FROM pedidos ORDER BY fechaPedido DESC');
-  return result.map((p) => ({
-    ...p,
-    medicamentosSolicitados: p.medicamentosSolicitados ? JSON.parse(p.medicamentosSolicitados) : [],
-    entregasRealizadas: p.entregasRealizadas ? JSON.parse(p.entregasRealizadas) : [],
-  }));
+  return result.map(normalizePedido);
 };
 
 export const getPedidoById = async (id) => {
   const dbInstance = await getDb();
-  return await dbInstance.getFirstAsync('SELECT * FROM pedidos WHERE id = ?', [id]);
+  const row = await dbInstance.getFirstAsync('SELECT * FROM pedidos WHERE id = ?', [id]);
+  return normalizePedido(row);
 };
 
 export const savePedido = async (pedido, syncStatus = 'synced', pendingOp = null) => {
@@ -437,6 +489,15 @@ export const getUsuarioById = async (id) => {
   return await dbInstance.getFirstAsync('SELECT * FROM usuarios WHERE id = ?', [id]);
 };
 
+// Búsqueda case-insensitive por nombre, usada en el login local
+export const getUsuarioByNombre = async (nombre) => {
+  const dbInstance = await getDb();
+  return await dbInstance.getFirstAsync(
+    'SELECT * FROM usuarios WHERE LOWER(nombre) = LOWER(?)',
+    [nombre]
+  );
+};
+
 export const saveUsuario = async (usuario, syncStatus = 'synced', pendingOp = null) => {
   const dbInstance = await getDb();
   const now = new Date().toISOString();
@@ -493,11 +554,48 @@ export const saveHistory = async (historyItem, syncStatus = 'synced', pendingOp 
 };
 
 // ─────────────────────────────────────────────────────────────
+// CATEGORIAS
+// ─────────────────────────────────────────────────────────────
+export const getAllCategorias = async () => {
+  const dbInstance = await getDb();
+  return await dbInstance.getAllAsync('SELECT * FROM categorias ORDER BY nombre');
+};
+
+export const getCategoriaByNombre = async (nombre) => {
+  const dbInstance = await getDb();
+  return await dbInstance.getFirstAsync(
+    'SELECT * FROM categorias WHERE LOWER(nombre) = LOWER(?)',
+    [nombre]
+  );
+};
+
+export const saveCategoria = async (categoria, syncStatus = 'synced', pendingOp = null) => {
+  const dbInstance = await getDb();
+  const now = new Date().toISOString();
+  const existing = await dbInstance.getFirstAsync('SELECT id FROM categorias WHERE id = ?', [
+    categoria.id,
+  ]);
+
+  if (existing) {
+    await dbInstance.runAsync(
+      `UPDATE categorias SET nombre = ?, ubicacion = ?, updated = ?, _syncStatus = ?, _pendingOp = ? WHERE id = ?`,
+      [categoria.nombre, categoria.ubicacion || '', now, syncStatus, pendingOp, categoria.id]
+    );
+  } else {
+    await dbInstance.runAsync(
+      `INSERT INTO categorias (id, nombre, ubicacion, updated, _syncStatus, _pendingOp) VALUES (?, ?, ?, ?, ?, ?)`,
+      [categoria.id, categoria.nombre, categoria.ubicacion || '', now, syncStatus, pendingOp]
+    );
+  }
+  return categoria;
+};
+
+// ─────────────────────────────────────────────────────────────
 // VERIFICACIÓN
 // ─────────────────────────────────────────────────────────────
 export const checkTablesStatus = async () => {
   const dbInstance = await getDb();
-  const tables = ['medicamentos', 'pedidos', 'entregas', 'usuarios', 'history'];
+  const tables = ['medicamentos', 'pedidos', 'entregas', 'usuarios', 'history', 'categorias'];
   const status = {};
   for (const table of tables) {
     const result = await dbInstance.getFirstAsync(`SELECT COUNT(*) as count FROM ${table}`);

@@ -29,8 +29,16 @@ import {
   ChevronUp,
 } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { pb } from '../services/PocketBaseConfig';
 import { sendLocalNotification } from '../services/NotificationService';
+import {
+  entregasList,
+  entregaGetOne,
+  entregaCreate,
+  entregaUpdate,
+  medicamentosList,
+  medicamentoUpdate,
+  historyCreate,
+} from '../services/LocalDataService';
 
 export default function EntregasScreen({ user }) {
   const [entregas, setEntregas] = useState([]);
@@ -58,13 +66,13 @@ export default function EntregasScreen({ user }) {
 
   const registrarHistory = async (idMed, fecha, user, movimiento, cantidad, nombreMed = '') => {
     try {
-      await pb.collection('history').create({
+      await historyCreate({
         id_med: idMed,
         fecha: fecha,
         user: user,
         movimiento: movimiento,
         cantidad: cantidad,
-        name: nombreMed,
+        nombre: nombreMed,
       });
       console.log(`📝 History registrado: ${movimiento} - ${nombreMed}`);
     } catch (error) {
@@ -81,14 +89,18 @@ export default function EntregasScreen({ user }) {
     else setLoading(true);
 
     try {
-      const [entregasResult, medicamentosResult] = await Promise.all([
-        pb.collection('entregas').getList(1, 100, { sort: '-fechacreacion', requestKey: null }),
-        pb
-          .collection('medicamentos')
-          .getList(1, 500, { filter: 'activo = true', sort: 'nombre', requestKey: null }),
+      const [todasEntregas, medicamentosActivos] = await Promise.all([
+        entregasList(),
+        medicamentosList(true),
       ]);
-      setEntregas(entregasResult.items);
-      setMedicamentos(medicamentosResult.items);
+      const entregasOrdenadas = [...todasEntregas].sort(
+        (a, b) => new Date(b.fechaCreacion || 0) - new Date(a.fechaCreacion || 0)
+      );
+      const medicamentosOrdenados = [...medicamentosActivos].sort((a, b) =>
+        (a.nombre || '').localeCompare(b.nombre || '')
+      );
+      setEntregas(entregasOrdenadas);
+      setMedicamentos(medicamentosOrdenados);
     } catch (error) {
       if (!error.isAbort) {
         console.error('Error cargando datos:', error);
@@ -190,11 +202,16 @@ export default function EntregasScreen({ user }) {
   const verificarEntregaExistente = async () => {
     if (!destino.trim()) return null;
     try {
-      const result = await pb.collection('entregas').getList(1, 1, {
-        filter: `destino = "${destino.trim()}" && pedidoid = "" && estado = "abierta"`,
-        requestKey: null,
-      });
-      return result.items.length > 0 ? result.items[0] : null;
+      const todasEntregas = await entregasList();
+      const destinoNorm = destino.trim().toLowerCase();
+      return (
+        todasEntregas.find(
+          (e) =>
+            (e.destino || '').trim().toLowerCase() === destinoNorm &&
+            !e.pedidoId &&
+            e.estado === 'abierta'
+        ) || null
+      );
     } catch (error) {
       console.error('Error:', error);
       return null;
@@ -257,21 +274,21 @@ export default function EntregasScreen({ user }) {
         fechaAgregado: new Date().toISOString(),
       }));
 
-      await pb.collection('entregas').create({
+      await entregaCreate({
         destino: destino.trim(),
-        fechacreacion: new Date().toISOString(),
-        pedidoid: '',
+        fechaCreacion: new Date().toISOString(),
+        pedidoId: null,
         items: items,
         estado: 'abierta',
-        creadopor: getUserName(),
+        creadoPor: getUserName(),
         notas: notas.trim() || '',
-        ultimamodificacion: new Date().toISOString(),
+        ultimaModificacion: new Date().toISOString(),
       });
 
       for (const med of medicamentosSeleccionados) {
         const medicamentoActual = medicamentos.find((m) => m.id === med.medicamentoId);
         const nuevaCantidad = medicamentoActual.cantidad - med.cantidad;
-        await pb.collection('medicamentos').update(med.medicamentoId, { cantidad: nuevaCantidad });
+        await medicamentoUpdate(med.medicamentoId, { cantidad: nuevaCantidad });
         await registrarHistory(
           med.medicamentoId,
           new Date().toISOString(),
@@ -341,15 +358,15 @@ export default function EntregasScreen({ user }) {
         );
       }
 
-      await pb.collection('entregas').update(entrega.id, {
+      await entregaUpdate(entrega.id, {
         items: nuevosItems,
-        ultimamodificacion: new Date().toISOString(),
+        ultimaModificacion: new Date().toISOString(),
       });
 
       for (const med of medicamentosSeleccionados) {
         const medicamentoActual = medicamentos.find((m) => m.id === med.medicamentoId);
         const nuevaCantidad = medicamentoActual.cantidad - med.cantidad;
-        await pb.collection('medicamentos').update(med.medicamentoId, { cantidad: nuevaCantidad });
+        await medicamentoUpdate(med.medicamentoId, { cantidad: nuevaCantidad });
       }
 
       Alert.alert('Éxito', 'Medicamentos agregados a la entrega existente', [
@@ -387,9 +404,9 @@ export default function EntregasScreen({ user }) {
       );
     }
     if (filter === 'abiertas') {
-      filtered = filtered.filter((e) => e.estado === 'abierta' && !e.pedidoid);
+      filtered = filtered.filter((e) => e.estado === 'abierta' && !e.pedidoId);
     } else if (filter === 'cerradas') {
-      filtered = filtered.filter((e) => e.estado === 'cerrada' || e.pedidoid !== '');
+      filtered = filtered.filter((e) => e.estado === 'cerrada' || !!e.pedidoId);
     }
     return filtered;
   };
@@ -408,8 +425,8 @@ export default function EntregasScreen({ user }) {
   const totalUnidades = medicamentosSeleccionados.reduce((sum, m) => sum + m.cantidad, 0);
   const filteredEntregas = getFilteredEntregas();
   const totalEntregas = entregas.length;
-  const abiertasCount = entregas.filter((e) => e.estado === 'abierta' && !e.pedidoid).length;
-  const cerradasCount = entregas.filter((e) => e.estado === 'cerrada' || e.pedidoid !== '').length;
+  const abiertasCount = entregas.filter((e) => e.estado === 'abierta' && !e.pedidoId).length;
+  const cerradasCount = entregas.filter((e) => e.estado === 'cerrada' || !!e.pedidoId).length;
 
   if (loading) {
     return (
@@ -491,7 +508,7 @@ export default function EntregasScreen({ user }) {
           </View>
         ) : (
           filteredEntregas.map((entrega) => {
-            const isAbierta = entrega.estado === 'abierta' && !entrega.pedidoid;
+            const isAbierta = entrega.estado === 'abierta' && !entrega.pedidoId;
             return (
               <View key={entrega.id} style={styles.entregaCard}>
                 <TouchableOpacity
@@ -526,13 +543,13 @@ export default function EntregasScreen({ user }) {
                     <View style={styles.detailRow}>
                       <Calendar size={12} color="#6B7280" />
                       <Text style={styles.detailTextSmall}>
-                        {formatDate(entrega.fechacreacion)}
+                        {formatDate(entrega.fechaCreacion)}
                       </Text>
                     </View>
                     <View style={styles.detailRow}>
                       <User size={12} color="#6B7280" />
                       <Text style={styles.detailTextSmall}>
-                        Creado por: {entrega.creadopor || 'usuario'}
+                        Creado por: {entrega.creadoPor || 'usuario'}
                       </Text>
                     </View>
                     <View style={styles.itemsContainer}>
@@ -547,7 +564,7 @@ export default function EntregasScreen({ user }) {
                         </View>
                       ))}
                     </View>
-                    {entrega.pedidoid ? (
+                    {entrega.pedidoId ? (
                       <View style={styles.vinculadaContainer}>
                         <Text style={styles.vinculadaText}>✓ Vinculada al pedido</Text>
                       </View>

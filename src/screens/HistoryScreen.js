@@ -28,7 +28,11 @@ import {
 } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
-import { pb } from '../services/PocketBaseConfig';
+import {
+  medicamentoGetOne,
+  medicamentosList,
+  historyList,
+} from '../services/LocalDataService';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
@@ -107,9 +111,18 @@ export default function HistoryScreen() {
       }
 
       try {
-        const result = await pb.collection('medicamentos').getOne(idMed, {
-          requestKey: null,
-        });
+        const result = await medicamentoGetOne(idMed);
+        if (!result) {
+          const descriptor = `Medicamento (ID: ${idMed?.substring(0, 8) || 'N/A'}...)`;
+          const medicamentoInfo = {
+            descriptor,
+            presentacion: '',
+            nombre: '',
+            existe: false,
+          };
+          setMedicamentosCache((prev) => ({ ...prev, [idMed]: medicamentoInfo }));
+          return medicamentoInfo;
+        }
         const nombre = result.nombre || 'Desconocido';
         const presentacion = result.presentacion || '';
         //const descriptorCompleto = presentacion ? `${nombre} (${presentacion})` : nombre;
@@ -124,12 +137,8 @@ export default function HistoryScreen() {
         setMedicamentosCache((prev) => ({ ...prev, [idMed]: medicamentoInfo }));
         return medicamentoInfo;
       } catch (error) {
-        let descriptor = 'Medicamento eliminado';
-        if (error.status === 404) {
-          descriptor = `Medicamento (ID: ${idMed?.substring(0, 8) || 'N/A'}...)`;
-        } else {
-          console.error('Error obteniendo medicamento:', error);
-        }
+        console.error('Error obteniendo medicamento:', error);
+        const descriptor = 'Medicamento eliminado';
 
         const medicamentoInfo = {
           descriptor: descriptor,
@@ -169,23 +178,19 @@ export default function HistoryScreen() {
       filtered = filtered.filter((h) => h.movimiento === filterMovimiento);
     }
 
-    // ✅ FILTRO POR MEDICAMENTO (misma lógica)
+    // ✅ FILTRO POR MEDICAMENTO (ahora buscando en JS sobre datos locales)
     if (filters.medicamento && filters.medicamento.trim()) {
       const searchMed = filters.medicamento.trim();
       const searchWords = searchMed.toLowerCase().split(/\s+/);
 
-      const wordFilters = searchWords.map((word) => {
-        return `(nombre ~ "${word}" || presentacion ~ "${word}")`;
-      });
-      const pocketBaseFilter = wordFilters.join(' && ');
-
       try {
-        const medicamentosResult = await pb.collection('medicamentos').getList(1, 100, {
-          filter: pocketBaseFilter,
-          requestKey: null,
+        const todosMedicamentos = await medicamentosList();
+        const encontrados = todosMedicamentos.filter((m) => {
+          const haystack = `${m.nombre || ''} ${m.presentacion || ''}`.toLowerCase();
+          return searchWords.every((word) => haystack.includes(word));
         });
 
-        const idsMedicamentos = medicamentosResult.items.map((m) => m.id);
+        const idsMedicamentos = encontrados.map((m) => m.id);
 
         if (idsMedicamentos.length > 0) {
           filtered = filtered.filter((h) => idsMedicamentos.includes(h.id_med));
@@ -231,34 +236,16 @@ export default function HistoryScreen() {
       console.log(`🔍 Búsqueda: "${searchTermTrimmed}"`);
       console.log(`   Palabras: ${searchWords.join(', ')}`);
 
-      // 1️⃣ Construir filtro para PocketBase (cada palabra como condición independiente)
-      // Ej: "Cap 500" -> (nombre ~ "Cap" || presentacion ~ "Cap") && (nombre ~ "500" || presentacion ~ "500")
-      const wordFilters = searchWords.map((word) => {
-        return `(nombre ~ "${word}" || presentacion ~ "${word}")`;
-      });
-      const pocketBaseFilter = wordFilters.join(' && ');
-
-      console.log(`   Filtro PocketBase: ${pocketBaseFilter}`);
-
-      // 2️⃣ Buscar medicamentos que coincidan con TODAS las palabras
+      // 2️⃣ Buscar medicamentos que coincidan con TODAS las palabras (local, en JS)
       let medicamentosEncontrados = [];
       try {
-        const result = await pb.collection('medicamentos').getList(1, 100, {
-          filter: pocketBaseFilter,
-          requestKey: null,
+        const todosMedicamentos = await medicamentosList();
+        medicamentosEncontrados = todosMedicamentos.filter((m) => {
+          const haystack = `${m.nombre || ''} ${m.presentacion || ''}`.toLowerCase();
+          return searchWords.every((word) => haystack.includes(word));
         });
-        medicamentosEncontrados = result.items;
       } catch (filterError) {
-        console.error('Error en filtro PocketBase:', filterError);
-        // Si falla, buscar con filtro más simple
-        const simpleFilter = searchWords
-          .map((word) => `(nombre ~ "${word}" || presentacion ~ "${word}")`)
-          .join(' || ');
-        const result = await pb.collection('medicamentos').getList(1, 100, {
-          filter: simpleFilter,
-          requestKey: null,
-        });
-        medicamentosEncontrados = result.items;
+        console.error('Error buscando medicamentos:', filterError);
       }
 
       const idsMedicamentos = medicamentosEncontrados.map((m) => m.id);
@@ -325,12 +312,12 @@ export default function HistoryScreen() {
       else setLoading(true);
 
       try {
-        const result = await pb.collection('history').getList(1, 500, {
-          sort: '-fecha',
-          requestKey: null,
-        });
+        const items = await historyList();
+        const ordenados = [...items].sort(
+          (a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0)
+        );
 
-        const processedItems = await processHistoryWithDescriptors(result.items);
+        const processedItems = await processHistoryWithDescriptors(ordenados);
         setHistory(processedItems);
 
         // Aplicar filtros después de cargar
@@ -399,25 +386,19 @@ export default function HistoryScreen() {
       filtered = filtered.filter((h) => h.movimiento === filterMovimiento);
     }
 
-    // ✅ FILTRO POR MEDICAMENTO (con búsqueda flexible en PocketBase)
+    // ✅ FILTRO POR MEDICAMENTO (búsqueda local en JS, para el PDF)
     if (filters.medicamento && filters.medicamento.trim()) {
       const searchMed = filters.medicamento.trim();
       const searchWords = searchMed.toLowerCase().split(/\s+/);
 
-      // Construir filtro para PocketBase
-      const wordFilters = searchWords.map((word) => {
-        return `(nombre ~ "${word}" || presentacion ~ "${word}")`;
-      });
-      const pocketBaseFilter = wordFilters.join(' && ');
-
       try {
-        // Buscar medicamentos que coincidan
-        const medicamentosResult = await pb.collection('medicamentos').getList(1, 100, {
-          filter: pocketBaseFilter,
-          requestKey: null,
+        const todosMedicamentos = await medicamentosList();
+        const encontrados = todosMedicamentos.filter((m) => {
+          const haystack = `${m.nombre || ''} ${m.presentacion || ''}`.toLowerCase();
+          return searchWords.every((word) => haystack.includes(word));
         });
 
-        const idsMedicamentos = medicamentosResult.items.map((m) => m.id);
+        const idsMedicamentos = encontrados.map((m) => m.id);
 
         if (idsMedicamentos.length > 0) {
           filtered = filtered.filter((h) => idsMedicamentos.includes(h.id_med));

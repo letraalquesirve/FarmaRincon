@@ -36,9 +36,17 @@ import {
   CheckSquare,
   Square,
 } from 'lucide-react-native';
-import { pb } from '../services/PocketBaseConfig';
 import { sendLocalNotification } from '../services/NotificationService';
-import { useRoute } from '@react-navigation/native';
+import {
+  pedidosList,
+  pedidoCreate,
+  pedidoUpdate,
+  pedidoDelete,
+  entregasList,
+  entregaUpdate,
+  medicamentosList,
+} from '../services/LocalDataService';
+import { useRoute, useFocusEffect } from '@react-navigation/native';
 
 export default function PedidosScreen({ user }) {
   const [pedidos, setPedidos] = useState([]);
@@ -82,7 +90,6 @@ export default function PedidosScreen({ user }) {
 
   // Refs para evitar cargas duplicadas y manejar suscripciones
   const isLoadingRef = useRef(false);
-  const subscriptionsRef = useRef([]);
 
   const getUserName = () => user?.nombre || 'usuario';
 
@@ -95,16 +102,23 @@ export default function PedidosScreen({ user }) {
     else setLoading(true);
 
     try {
-      const [pedidosResult, entregasResult, medicamentosResult] = await Promise.all([
-        pb.collection('pedidos').getList(1, 100, { sort: '-fechapedido', requestKey: null }),
-        pb.collection('entregas').getList(1, 100, { sort: '-fechacreacion', requestKey: null }),
-        pb
-          .collection('medicamentos')
-          .getList(1, 500, { filter: 'activo = true', sort: 'nombre', requestKey: null }),
+      const [todosPedidos, todasEntregas, medicamentosActivos] = await Promise.all([
+        pedidosList(),
+        entregasList(),
+        medicamentosList(true),
       ]);
-      setPedidos(pedidosResult.items);
-      setEntregas(entregasResult.items);
-      setMedicamentos(medicamentosResult.items);
+      const pedidosOrdenados = [...todosPedidos].sort(
+        (a, b) => new Date(b.fechaPedido || 0) - new Date(a.fechaPedido || 0)
+      );
+      const entregasOrdenadas = [...todasEntregas].sort(
+        (a, b) => new Date(b.fechaCreacion || 0) - new Date(a.fechaCreacion || 0)
+      );
+      const medicamentosOrdenados = [...medicamentosActivos].sort((a, b) =>
+        (a.nombre || '').localeCompare(b.nombre || '')
+      );
+      setPedidos(pedidosOrdenados);
+      setEntregas(entregasOrdenadas);
+      setMedicamentos(medicamentosOrdenados);
     } catch (error) {
       if (!error.isAbort) {
         console.error('Error cargando datos:', error);
@@ -117,68 +131,18 @@ export default function PedidosScreen({ user }) {
     }
   }, []);
 
-  // ── Realtime subscriptions (CORREGIDO) ──
-  const setupRealtimeSubscriptions = useCallback(() => {
-    // Limpiar suscripciones anteriores ✅ CORREGIDO
-    subscriptionsRef.current.forEach((sub) => {
-      if (sub && typeof sub.unsubscribe === 'function') {
-        sub.unsubscribe();
-      }
-    });
-    subscriptionsRef.current = [];
-
-    // Suscribirse a cambios en pedidos
-    const pedidosSub = pb.collection('pedidos').subscribe('*', (e) => {
-      console.log('🔄 Cambio en pedidos:', e.action, e.record?.id);
-
-      if (e.action === 'create') {
-        setPedidos((prev) => [e.record, ...prev]);
-      } else if (e.action === 'update') {
-        setPedidos((prev) => prev.map((p) => (p.id === e.record.id ? e.record : p)));
-      } else if (e.action === 'delete') {
-        setPedidos((prev) => prev.filter((p) => p.id !== e.record.id));
-      }
-    });
-
-    // Suscribirse a cambios en entregas
-    const entregasSub = pb.collection('entregas').subscribe('*', (e) => {
-      console.log('🔄 Cambio en entregas:', e.action, e.record?.id);
-
-      if (e.action === 'create') {
-        setEntregas((prev) => [e.record, ...prev]);
-      } else if (e.action === 'update') {
-        setEntregas((prev) => prev.map((e2) => (e2.id === e.record.id ? e.record : e2)));
-      } else if (e.action === 'delete') {
-        setEntregas((prev) => prev.filter((e2) => e2.id !== e.record.id));
-      }
-    });
-
-    // Suscribirse a cambios en medicamentos
-    const medicamentosSub = pb.collection('medicamentos').subscribe('*', (e) => {
-      console.log('🔄 Cambio en medicamentos:', e.action);
-      if (e.action === 'update' || e.action === 'create') {
-        loadData();
-      }
-    });
-
-    // Guardar las suscripciones (objetos con método unsubscribe)
-    subscriptionsRef.current = [pedidosSub, entregasSub, medicamentosSub];
-  }, [loadData]);
-
-  // Cargar datos iniciales y setup realtime
+  // Cargar datos iniciales y recargar cada vez que la pantalla obtiene foco
+  // (antes esto lo cubrían las suscripciones en tiempo real de PocketBase;
+  // con SQLite local, un refresco al enfocar es instantáneo y suficiente)
   useEffect(() => {
     loadData();
-    setupRealtimeSubscriptions();
+  }, []);
 
-    return () => {
-      // Limpiar suscripciones al desmontar ✅ CORREGIDO
-      subscriptionsRef.current.forEach((sub) => {
-        if (sub && typeof sub.unsubscribe === 'function') {
-          sub.unsubscribe();
-        }
-      });
-    };
-  }, [loadData, setupRealtimeSubscriptions]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const onRefresh = useCallback(() => loadData(true), [loadData]);
 
@@ -276,21 +240,21 @@ export default function PedidosScreen({ user }) {
     });
 
     const pedidoData = {
-      nombresolicitante: formData.nombreSolicitante.trim(),
-      lugarresidencia: formData.lugarResidencia.trim() || '',
-      telefonocontacto: formData.telefonoContacto.trim() || '',
+      nombreSolicitante: formData.nombreSolicitante.trim(),
+      lugarResidencia: formData.lugarResidencia.trim() || '',
+      telefonoContacto: formData.telefonoContacto.trim() || '',
       notas: formData.notas.trim() || '',
-      medicamentossolicitados: medicamentosLimpios,
+      medicamentosSolicitados: medicamentosLimpios,
       atendido: false,
-      entregasrealizadas: [],
-      fechapedido: new Date().toISOString(),
-      fechaatencion: null,
-      creadopor: getUserName(),
-      atendidopor: '',
+      entregasRealizadas: [],
+      fechaPedido: new Date().toISOString(),
+      fechaAtencion: null,
+      creadoPor: getUserName(),
+      atendidoPor: '',
     };
 
     try {
-      await pb.collection('pedidos').create(pedidoData);
+      await pedidoCreate(pedidoData);
       await sendLocalNotification(
         '📋 Nuevo Pedido',
         `${formData.nombreSolicitante} ha solicitado ${formData.medicamentosSolicitados.length} medicamento(s)`
@@ -304,6 +268,7 @@ export default function PedidosScreen({ user }) {
       });
       setShowForm(false);
       Alert.alert('Éxito', 'Pedido registrado correctamente');
+      await loadData();
     } catch (error) {
       console.error('❌ Error:', error);
       Alert.alert('Error', `No se pudo crear el pedido: ${error.message}`);
@@ -320,8 +285,9 @@ export default function PedidosScreen({ user }) {
         style: 'destructive',
         onPress: async () => {
           try {
-            await pb.collection('pedidos').delete(pedidoId);
+            await pedidoDelete(pedidoId);
             Alert.alert('Éxito', 'Pedido eliminado correctamente');
+            await loadData();
           } catch (error) {
             Alert.alert('Error', 'No se pudo eliminar el pedido');
           }
@@ -353,10 +319,10 @@ export default function PedidosScreen({ user }) {
         const entrega = entregas.find((e) => e.id === entregaId);
         if (!entrega) continue;
 
-        await pb.collection('entregas').update(entregaId, {
-          pedidoid: selectedPedido.id,
-          vinculadaen: new Date().toISOString(),
-          vinculadapor: getUserName(),
+        await entregaUpdate(entregaId, {
+          pedidoId: selectedPedido.id,
+          vinculadaEn: new Date().toISOString(),
+          vinculadaPor: getUserName(),
           estado: 'cerrada',
         });
 
@@ -370,17 +336,18 @@ export default function PedidosScreen({ user }) {
       }
 
       const entregasActuales = selectedPedido.entregasRealizadas || [];
-      await pb.collection('pedidos').update(selectedPedido.id, {
-        entregasrealizadas: [...entregasActuales, ...nuevasEntregas],
+      await pedidoUpdate(selectedPedido.id, {
+        entregasRealizadas: [...entregasActuales, ...nuevasEntregas],
         atendido: true,
-        fechaatencion: new Date().toISOString(),
-        atendidopor: getUserName(),
+        fechaAtencion: new Date().toISOString(),
+        atendidoPor: getUserName(),
       });
 
       setShowAtenderModal(false);
       setSelectedPedido(null);
       setSelectedEntregasIds([]);
       Alert.alert('Éxito', `Pedido atendido con ${nuevasEntregas.length} entrega(s)`);
+      await loadData();
     } catch (error) {
       console.error('Error:', error);
       Alert.alert('Error', 'No se pudo actualizar el pedido');
@@ -551,14 +518,14 @@ export default function PedidosScreen({ user }) {
                     ]}
                   />
                   <View>
-                    <Text style={styles.pedidoNombre}>{pedido.nombresolicitante}</Text>
+                    <Text style={styles.pedidoNombre}>{pedido.nombreSolicitante}</Text>
                     {pedido.notas ? (
                       <Text style={styles.pedidoNotas} numberOfLines={1}>
                         📝 {pedido.notas}
                       </Text>
                     ) : null}
                     <Text style={styles.pedidoMedicamentos}>
-                      {pedido.medicamentossolicitados?.length || 0} solicitados |{' '}
+                      {pedido.medicamentosSolicitados?.length || 0} solicitados |{' '}
                       {getTotalEntregadosCount(pedido)} entregados
                     </Text>
                   </View>
@@ -566,7 +533,7 @@ export default function PedidosScreen({ user }) {
                 <View style={styles.pedidoHeaderRight}>
                   {!pedido.atendido && (
                     <TouchableOpacity
-                      onPress={() => eliminarPedido(pedido.id, pedido.nombresolicitante)}
+                      onPress={() => eliminarPedido(pedido.id, pedido.nombreSolicitante)}
                     >
                       <Trash2 color="#DC2626" size={20} />
                     </TouchableOpacity>
@@ -579,18 +546,18 @@ export default function PedidosScreen({ user }) {
                 <View style={styles.pedidoDetails}>
                   <View style={styles.detailRow}>
                     <Calendar size={16} color="#6B7280" />
-                    <Text style={styles.detailText}>{formatDate(pedido.fechapedido)}</Text>
+                    <Text style={styles.detailText}>{formatDate(pedido.fechaPedido)}</Text>
                   </View>
-                  {pedido.lugarresidencia && (
+                  {pedido.lugarResidencia && (
                     <View style={styles.detailRow}>
                       <MapPin size={16} color="#6B7280" />
-                      <Text style={styles.detailText}>{pedido.lugarresidencia}</Text>
+                      <Text style={styles.detailText}>{pedido.lugarResidencia}</Text>
                     </View>
                   )}
                   {pedido.telefonoContacto && (
                     <View style={styles.detailRow}>
                       <Phone size={16} color="#6B7280" />
-                      <Text style={styles.detailText}>{pedido.telefonocontacto}</Text>
+                      <Text style={styles.detailText}>{pedido.telefonoContacto}</Text>
                     </View>
                   )}
 
@@ -598,7 +565,7 @@ export default function PedidosScreen({ user }) {
                     <Text style={styles.medicamentosEntregadosTitle}>
                       Medicamentos solicitados:
                     </Text>
-                    {pedido.medicamentossolicitados?.map((med, idx) => {
+                    {pedido.medicamentosSolicitados?.map((med, idx) => {
                       const status = getMedicamentoEnPedidoStatus(med);
                       return (
                         <View key={idx} style={styles.medicamentoEntregadoItem}>
@@ -612,16 +579,16 @@ export default function PedidosScreen({ user }) {
                     })}
                   </View>
 
-                  {pedido.entregasrealizadas && pedido.entregasrealizadas.length > 0 && (
+                  {pedido.entregasRealizadas && pedido.entregasRealizadas.length > 0 && (
                     <View style={styles.medicamentosEntregadosContainer}>
                       <Text style={styles.medicamentosEntregadosTitle}>
                         Medicamentos entregados:
                       </Text>
-                      {pedido.entregasrealizadas.map((entrega, idx) => (
+                      {pedido.entregasRealizadas.map((entrega, idx) => (
                         <View key={idx} style={styles.entregaRealizadaItem}>
                           <Text style={styles.entregaFecha}>📅 {formatDate(entrega.fecha)}</Text>
                           <Text style={styles.entregaDestino}>
-                            📍 Destino: {entrega.destino || pedido.nombresolicitante}
+                            📍 Destino: {entrega.destino || pedido.nombreSolicitante}
                           </Text>
                           <Text style={styles.entregaUsuario}>
                             👤 Entregado por: {entrega.realizadopor || 'usuario'}
@@ -935,7 +902,7 @@ export default function PedidosScreen({ user }) {
                             <Square size={22} color="#9CA3AF" />
                           )}
                           <Text style={styles.entregaOptionFecha}>
-                            📅 {formatDate(entrega.fechacreacion)}
+                            📅 {formatDate(entrega.fechaCreacion)}
                           </Text>
                         </View>
                         <View style={styles.entregaOptionDestinoContainer}>
@@ -943,7 +910,7 @@ export default function PedidosScreen({ user }) {
                           <Text style={styles.entregaOptionDestinoValue}>{entrega.destino}</Text>
                         </View>
                         <Text style={styles.entregaOptionCreadoPor}>
-                          👤 Creado por: {entrega.creadopor || 'usuario'}
+                          👤 Creado por: {entrega.creadoPor || 'usuario'}
                         </Text>
                         <View style={styles.entregaOptionItemsHeader}>
                           <Text style={styles.entregaOptionItemsTitle}>Medicamentos:</Text>

@@ -1,8 +1,4 @@
 // App.js
-import EventSource from 'react-native-sse';
-
-global.EventSource = EventSource;
-
 import React, { useState, useEffect } from 'react';
 import { LogBox, View, ActivityIndicator, Platform, Dimensions, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
@@ -19,8 +15,9 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Importar PocketBase
-import { pb } from './src/services/PocketBaseConfig';
+// BD local (ya no dependemos de PocketBase en vivo para leer/escribir)
+import { initDatabase } from './src/services/SQLiteService';
+import { usuarioGetByNombre } from './src/services/LocalDataService';
 
 // Importar screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -54,6 +51,7 @@ export default function App() {
     const initializeApp = async () => {
       if (!isMounted) return;
 
+      await initDatabase();
       await checkApiKey();
       await loadStoredUser();
 
@@ -97,20 +95,7 @@ export default function App() {
 
   const loadStoredUser = async () => {
     try {
-      // Cargar autenticación guardada de PocketBase
-      const stored = await AsyncStorage.getItem('pb_auth');
-      if (stored) {
-        const { token, model } = JSON.parse(stored);
-        if (token && model) {
-          pb.authStore.save(token, model);
-          setUser(model);
-          setIsLoggedIn(true);
-          console.log('✅ Sesión restaurada:', model.nombre);
-          return;
-        }
-      }
-
-      // También verificar usuario guardado localmente
+      // Verificar usuario guardado localmente (login es 100% local ahora)
       const localUserStr = await AsyncStorage.getItem('currentUser');
       if (localUserStr) {
         const localUser = JSON.parse(localUserStr);
@@ -130,34 +115,27 @@ export default function App() {
 
   const handleLogin = async (username) => {
     try {
-      const result = await pb.collection('usuarios').getList(1, 1, {
-        filter: `nombre = "${username}"`,
-        requestKey: null,
-      });
+      const userData = await usuarioGetByNombre(username);
 
-      if (result.items.length === 0) {
-        Alert.alert('Error', 'Usuario no encontrado');
+      if (!userData) {
+        Alert.alert(
+          'Usuario no encontrado',
+          'No existe ese usuario en la base de datos local. Si eres un usuario nuevo, pide al administrador que suba una copia actualizada, o descárgala desde "Cargar desde servidor" en Inicio.'
+        );
         return;
       }
 
-      const userData = result.items[0];
       setUser(userData);
-
-      // ❌ NOTIFICACIONES PUSH COMENTADAS
-      // await registerForPushNotifications(userData.id, pb);
-
       setIsLoggedIn(true);
       await AsyncStorage.setItem('currentUser', JSON.stringify(userData));
-      console.log('✅ Login exitoso:', userData.nombre);
+      console.log('✅ Login exitoso (local):', userData.nombre);
     } catch (error) {
       console.error('❌ Error de login:', error);
-      Alert.alert('Error', 'Usuario no encontrado');
+      Alert.alert('Error', 'No se pudo verificar el usuario en la base de datos local');
     }
   };
 
   const handleLogout = async () => {
-    pb.authStore.clear();
-    await AsyncStorage.removeItem('pb_auth');
     await AsyncStorage.removeItem('currentUser');
     setUser(null);
     setIsLoggedIn(false);

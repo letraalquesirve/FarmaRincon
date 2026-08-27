@@ -26,10 +26,10 @@ import {
   Download,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry, formatDate, getExpiryCategory } from '../utils/dateUtils';
-import { pb } from '../services/PocketBaseConfig';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { loadFromVPS, saveToVPS, hasLocalData } from '../services/SyncService';
 import { initDatabase, checkTablesStatus, exportDatabaseToFile } from '../services/SQLiteService';
+import { medicamentosList, pedidosList, entregasList } from '../services/LocalDataService';
 
 export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const navigation = useNavigation();
@@ -198,53 +198,25 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
       // Inicializar SQLite
       await initDatabase();
 
-      // Cargar medicamentos desde la vista
-      const medicamentosResult = await pb.collection('medicamentos').getList(1, 100, {
-        filter: 'activo = true',
-        sort: 'nombre',
-        requestKey: null,
-      });
+      // Cargar medicamentos activos desde SQLite local (sin red de por medio)
+      const medicamentosActivos = await medicamentosList(true);
 
-      console.log('📦 Total items con sort en la respuesta:', medicamentosResult.items.length);
-      console.log(
-        '📦 Activos (activo === true):',
-        medicamentosResult.items.filter((m) => m.activo === true).length
-      );
-      console.log(
-        '📦 Activos (activo === 1):',
-        medicamentosResult.items.filter((m) => m.activo === 1).length
-      );
-      console.log(
-        '📦 Activos (activo == true):',
-        medicamentosResult.items.filter((m) => m.activo == true).length
-      );
-      console.log('📋 PRIMEROS 10 MEDICAMENTOS:');
-      medicamentosResult.items.slice(0, 10).forEach((m) => {
-        console.log(`   ${m.nombre}: activo=${m.activo} (${typeof m.activo})`);
-      });
+      // Cargar pedidos y entregas, y filtrar en JS (igual que antes hacía PocketBase)
+      const [todosPedidos, todasEntregas] = await Promise.all([pedidosList(), entregasList()]);
 
-      // Cargar pedidos y entregas
-      const [pedidosResult, entregasResult] = await Promise.all([
-        pb.collection('pedidos').getList(1, 100, {
-          filter: 'atendido = false',
-          sort: '-fechapedido',
-          requestKey: null,
-        }),
-        pb.collection('entregas').getList(1, 100, {
-          filter: 'estado = "abierta" && pedidoid = null',
-          sort: '-fechacreacion',
-          requestKey: null,
-        }),
-      ]);
+      const pedidosPendientesList = todosPedidos.filter((p) => p.atendido === false);
+      const entregasAbiertasList = todasEntregas.filter(
+        (e) => e.estado === 'abierta' && !e.pedidoId
+      );
 
-      setMedicamentos(medicamentosResult.items);
-      setPedidosPendientes(pedidosResult.items);
-      setEntregasAbiertas(entregasResult.items);
+      setMedicamentos(medicamentosActivos);
+      setPedidosPendientes(pedidosPendientesList);
+      setEntregasAbiertas(entregasAbiertasList);
 
       // Filtrar
-      filtrarMedicamentos(medicamentosResult.items);
+      filtrarMedicamentos(medicamentosActivos);
 
-      console.log('📦 HomeScreen - Total medicamentos:', medicamentosResult.items.length);
+      console.log('📦 HomeScreen - Total medicamentos activos:', medicamentosActivos.length);
     } catch (error) {
       console.error('Error cargando datos:', error);
       Alert.alert('Error', 'No se pudieron cargar los datos');

@@ -10,11 +10,14 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { Key, LogIn, X } from 'lucide-react-native';
+import { Key, LogIn, X, Download } from 'lucide-react-native';
+import { loadFromVPS } from '../services/SyncService';
 
 export default function LoginModal({ visible, onLogin, onClose }) {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadMsg, setDownloadMsg] = useState('');
 
   const handleLogin = async () => {
     const trimmedUsername = username.trim();
@@ -29,6 +32,36 @@ export default function LoginModal({ visible, onLogin, onClose }) {
       setLoading(false);
       onLogin(trimmedUsername);
     }, 500);
+  };
+
+  // Primer arranque en un celular nuevo (o BD local vacía): bajar la
+  // última copia subida por el administrador antes de poder iniciar sesión.
+  const handleDownloadFromServer = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setDownloadMsg('Conectando con el servidor...');
+    try {
+      const ok = await loadFromVPS(username.trim() || 'nuevo_usuario', (mensaje) => {
+        setDownloadMsg(mensaje);
+      });
+      if (ok) {
+        Alert.alert(
+          'Listo',
+          'Se descargó la base de datos del servidor. Ahora intenta iniciar sesión.'
+        );
+      } else {
+        Alert.alert(
+          'No se pudo descargar',
+          'Revisa tu conexión a internet o pide al administrador que suba una copia reciente.'
+        );
+      }
+    } catch (error) {
+      console.error('Error descargando BD inicial:', error);
+      Alert.alert('Error', 'No se pudo descargar la base de datos del servidor');
+    } finally {
+      setDownloading(false);
+      setDownloadMsg('');
+    }
   };
 
   return (
@@ -66,6 +99,26 @@ export default function LoginModal({ visible, onLogin, onClose }) {
               <>
                 <LogIn color="white" size={20} />
                 <Text style={styles.loginButtonText}>Ingresar</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.downloadButton}
+            onPress={handleDownloadFromServer}
+            disabled={downloading}
+          >
+            {downloading ? (
+              <>
+                <ActivityIndicator color="#4F46E5" size="small" />
+                <Text style={styles.downloadButtonText}>{downloadMsg || 'Descargando...'}</Text>
+              </>
+            ) : (
+              <>
+                <Download color="#4F46E5" size={18} />
+                <Text style={styles.downloadButtonText}>
+                  Primera vez o BD vacía: descargar del servidor
+                </Text>
               </>
             )}
           </TouchableOpacity>
@@ -146,5 +199,25 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     textAlign: 'center',
     marginTop: 16,
+  },
+  downloadButton: {
+    marginTop: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    backgroundColor: '#EEF2FF',
+  },
+  downloadButtonText: {
+    color: '#4F46E5',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    flexShrink: 1,
   },
 });

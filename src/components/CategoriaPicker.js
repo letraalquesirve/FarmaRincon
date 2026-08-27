@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Search, X } from 'lucide-react-native';
-import { pb } from '../services/PocketBaseConfig';
+import { categoriasList } from '../services/LocalDataService';
 
 export default function CategoriaPicker({
   value,
@@ -33,12 +33,9 @@ export default function CategoriaPicker({
   const cargarCategorias = async () => {
     setLoading(true);
     try {
-      const result = await pb.collection('categorias').getList(1, 100, {
-        sort: 'nombre',
-        requestKey: null,
-      });
-      setCategoriasData(result.items);
-      setCategorias(result.items.map((item) => item.nombre));
+      const items = await categoriasList();
+      setCategoriasData(items);
+      setCategorias(items.map((item) => item.nombre));
     } catch (error) {
       console.error('Error cargando categorías:', error);
     } finally {

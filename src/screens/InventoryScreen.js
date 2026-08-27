@@ -31,7 +31,14 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
-import { pb } from '../services/PocketBaseConfig';
+import {
+  medicamentosList,
+  medicamentoGetOne,
+  medicamentoUpdate,
+  medicamentoCreate,
+  historyCreate,
+  categoriaGetByNombre,
+} from '../services/LocalDataService';
 
 // Components
 import { InventoryCard } from '../components/inventory/InventoryCard';
@@ -58,13 +65,13 @@ const escapeHtml = (text) => {
 
 const registrarHistory = async (idMed, fecha, user, movimiento, cantidad, nombreMed = '') => {
   try {
-    await pb.collection('history').create({
+    await historyCreate({
       id_med: idMed,
       fecha: fecha,
       user: user,
       movimiento: movimiento,
       cantidad: cantidad,
-      name: nombreMed,
+      nombre: nombreMed,
     });
     console.log(`📝 History registrado: ${movimiento} - ${nombreMed}`);
   } catch (error) {
@@ -115,33 +122,24 @@ export default function InventoryScreen({ user }) {
       setLoading(true);
 
       try {
-        const filters = [];
+        // Antes esto armaba un filtro de PocketBase contra la vista 'searck_key'.
+        // Ahora todo vive local: traemos los medicamentos (activos o inactivos)
+        // de SQLite y filtramos en JS, que con datos locales es instantáneo.
+        let items = await medicamentosList(!modoInactivos);
 
-        // 1. Filtro de activo/inactivo
-        if (modoInactivos) {
-          filters.push('activo = false');
-        } else {
-          filters.push('activo = true');
-        }
-
-        // 2. Filtro de búsqueda por texto - usando la vista
+        // 2. Filtro de búsqueda por texto (mismo criterio: todas las palabras deben aparecer)
         if (termino && termino.trim() !== '') {
-          // 2. Filtro de búsqueda por texto - usando la vista
-          if (termino && termino.trim() !== '') {
-            const searchTerm = normalizeSearchTerm(termino);
-            const palabras = searchTerm.split(/\s+/).filter((p) => p.length > 0);
+          const searchTerm = normalizeSearchTerm(termino);
+          const palabras = searchTerm.split(/\s+/).filter((p) => p.length > 0);
 
-            if (palabras.length === 1) {
-              // Una sola palabra: buscar en search_key
-              filters.push(`search_key ~ "${searchTerm}"`);
-            } else {
-              // Múltiples palabras: buscar TODAS en search_key (no en campos separados)
-              const condiciones = palabras.map((palabra) => `search_key ~ "${palabra}"`);
-              filters.push(`(${condiciones.join(' && ')})`);
-            }
+          items = items.filter((med) => {
+            const haystack = normalizeSearchTerm(
+              `${med.nombre || ''} ${med.presentacion || ''} ${med.categoria || ''}`
+            );
+            return palabras.every((palabra) => haystack.includes(palabra));
+          });
 
-            console.log('🔍 Palabras:', palabras);
-          }
+          console.log('🔍 Palabras:', palabras);
         }
 
         // 3. Filtros de vigencia (solo para activos)
@@ -153,35 +151,32 @@ export default function InventoryScreen({ user }) {
           const hoyStr = hoy.toISOString().split('T')[0];
           const dentro30DiasStr = dentro30Dias.toISOString().split('T')[0];
 
-          switch (filtroActual) {
-            case 'vigentes':
-              filters.push(`vencimiento > "${dentro30DiasStr}"`);
-              break;
-            case 'porVencer':
-              filters.push(`vencimiento >= "${hoyStr}" && vencimiento <= "${dentro30DiasStr}"`);
-              break;
-            case 'vencidos':
-              filters.push(`vencimiento < "${hoyStr}"`);
-              break;
-          }
+          items = items.filter((med) => {
+            const fechaVen = med.vencimiento ? med.vencimiento.split('T')[0] : '';
+            if (!fechaVen) return filtroActual === 'vigentes' ? false : false;
+            switch (filtroActual) {
+              case 'vigentes':
+                return fechaVen > dentro30DiasStr;
+              case 'porVencer':
+                return fechaVen >= hoyStr && fechaVen <= dentro30DiasStr;
+              case 'vencidos':
+                return fechaVen < hoyStr;
+              default:
+                return true;
+            }
+          });
         }
 
-        const filterString = filters.length > 0 ? filters.join(' && ') : '';
+        // Orden alfabético, igual que antes (sort: 'nombre')
+        items = [...items].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
 
         console.log('🔍 Modo:', modoInactivos ? 'INACTIVOS' : 'ACTIVOS');
         console.log('🔍 Término original:', termino);
         console.log('🔍 Filtro:', filtroActual);
-        console.log('🔍 FilterString:', filterString);
 
-        // CAMBIADO: usar la vista 'searck_key' en lugar de 'medicamentos'
-        const result = await pb.collection('searck_key').getList(1, 100, {
-          filter: filterString,
-          sort: 'nombre',
-        });
-
-        setResultados(result.items);
+        setResultados(items);
         setHaBuscado(true);
-        console.log(`📦 Resultados: ${result.items.length} medicamentos`);
+        console.log(`📦 Resultados: ${items.length} medicamentos`);
       } catch (error) {
         console.error('Error en búsqueda:', error);
         Alert.alert('Error', error.message || 'No se pudo realizar la búsqueda');
@@ -317,13 +312,8 @@ export default function InventoryScreen({ user }) {
   const obtenerUbicacionDesdeCategoria = async (categoriaNombre) => {
     if (!categoriaNombre) return '';
     try {
-      const result = await pb.collection('categorias').getList(1, 1, {
-        filter: `nombre = "${categoriaNombre}"`,
-      });
-      if (result.items.length > 0 && result.items[0].ubicacion) {
-        return result.items[0].ubicacion;
-      }
-      return '';
+      const categoria = await categoriaGetByNombre(categoriaNombre);
+      return categoria?.ubicacion || '';
     } catch (error) {
       console.error('Error obteniendo ubicación:', error);
       return '';
@@ -414,10 +404,10 @@ export default function InventoryScreen({ user }) {
         style: 'destructive',
         onPress: async () => {
           try {
-            const medActual = await pb.collection('medicamentos').getOne(medId);
-            await pb.collection('medicamentos').update(medId, {
+            const medActual = await medicamentoGetOne(medId);
+            await medicamentoUpdate(medId, {
               activo: false,
-              fechabaja: new Date().toISOString(),
+              fechaBaja: new Date().toISOString(),
             });
             await registrarHistory(
               medId,
@@ -458,19 +448,19 @@ export default function InventoryScreen({ user }) {
       }
     }
 
-    await pb.collection('medicamentos').update(selectedMed.id, {
+    await medicamentoUpdate(selectedMed.id, {
       nombre: form.nombre.trim(),
       presentacion: form.presentacion.trim() || 'No especificada',
       categoria: form.categoria.trim() || 'Sin categoría',
       cantidad: nuevaCantidad,
       vencimiento: fechaNueva,
       ubicacion: ubicacionFinal,
-      fechaedicion: new Date().toISOString(),
-      editadopor: getUserName(),
+      fechaEdicion: new Date().toISOString(),
+      editadoPor: getUserName(),
     });
 
     if (form.imagen !== selectedMed.imagen && form.imagen) {
-      await pb.collection('medicamentos').update(selectedMed.id, {
+      await medicamentoUpdate(selectedMed.id, {
         imagen: form.imagen,
       });
     }
@@ -500,7 +490,7 @@ export default function InventoryScreen({ user }) {
     const ubicacionDesdeCategoria = await obtenerUbicacionDesdeCategoria(form.categoria);
     const ubicacionFinal = ubicacionDesdeCategoria || form.ubicacion.trim();
 
-    const result = await pb.collection('medicamentos').create({
+    const result = await medicamentoCreate({
       nombre: form.nombre.trim(),
       presentacion: form.presentacion.trim() || 'No especificada',
       categoria: form.categoria.trim() || 'Sin categoría',
@@ -509,11 +499,9 @@ export default function InventoryScreen({ user }) {
       ubicacion: ubicacionFinal,
       imagen: selectedMed.imagen || null,
       activo: true,
-      fecharegistro: new Date().toISOString(),
-      username: getUserName(),
-      userid: getUserName(),
-      esduplicado: true,
-      duplicadode: selectedMed.id,
+      fechaRegistro: new Date().toISOString(),
+      userName: getUserName(),
+      userId: getUserName(),
     });
 
     await registrarHistory(
@@ -542,7 +530,7 @@ export default function InventoryScreen({ user }) {
       }
     }
 
-    await pb.collection('medicamentos').update(selectedMed.id, {
+    await medicamentoUpdate(selectedMed.id, {
       nombre: form.nombre.trim(),
       presentacion: form.presentacion.trim() || 'No especificada',
       categoria: form.categoria.trim() || 'Sin categoría',
@@ -550,14 +538,14 @@ export default function InventoryScreen({ user }) {
       vencimiento: form.vencimiento,
       ubicacion: ubicacionFinal,
       activo: true,
-      fechabaja: null,
-      fechaedicion: new Date().toISOString(),
-      editadopor: getUserName(),
+      fechaBaja: null,
+      fechaEdicion: new Date().toISOString(),
+      editadoPor: getUserName(),
       fechaReactivacion: new Date().toISOString(),
     });
 
     if (form.imagen !== selectedMed.imagen && form.imagen) {
-      await pb.collection('medicamentos').update(selectedMed.id, {
+      await medicamentoUpdate(selectedMed.id, {
         imagen: form.imagen,
       });
     }
