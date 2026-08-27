@@ -394,6 +394,7 @@ def subir_a_vps(filepath):
     body = b""
     body += field("usuario", USUARIO_MIGRACION)
     body += field("fecha_subida", ahora.isoformat())
+    body += field("filename", filename)
     body += (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'

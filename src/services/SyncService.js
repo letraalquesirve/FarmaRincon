@@ -57,14 +57,16 @@ const listRemoteBackups = async () => {
 // Subir archivo al VPS
 export const uploadToVPS = async (localUri, usuario) => {
   try {
+    const nombreArchivo = generarNombreArchivo('UNLOCK', usuario);
     const formData = new FormData();
     formData.append('file', {
       uri: localUri,
-      name: generarNombreArchivo('UNLOCK', usuario),
+      name: nombreArchivo,
       type: 'application/sql',
     });
     formData.append('usuario', usuario);
     formData.append('fecha_subida', new Date().toISOString());
+    formData.append('filename', nombreArchivo);
 
     const response = await fetch(`${VPS_BASE_URL}/api/collections/backups/records`, {
       method: 'POST',
