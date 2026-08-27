@@ -75,12 +75,19 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
     }
     const fechaSubida = info.fechaSubida ? formatDate(info.fechaSubida) : 'desconocida';
     const fechaCargado = info.fechaCargadoLocal ? formatDate(info.fechaCargadoLocal) : 'desconocida';
+    const estadoTexto =
+      info.estado === 'LOCK'
+        ? '🔒 Bloqueada para edición (esta u otra persona la está editando)'
+        : info.estado === 'UNLOCK'
+          ? '🔓 Libre (nadie la está editando ahora mismo)'
+          : 'desconocido';
     Alert.alert(
       'Base de datos actual',
       `Archivo: ${info.filename || 'desconocido'}\n` +
         `Subido por: ${info.subidoPor || 'desconocido'}\n` +
         `Fecha del backup: ${fechaSubida}\n` +
-        `Cargado en este celular: ${fechaCargado}`
+        `Cargado en este celular: ${fechaCargado}\n` +
+        `Estado: ${estadoTexto}`
     );
   };
 

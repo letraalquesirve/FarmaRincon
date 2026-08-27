@@ -55,6 +55,44 @@ const listRemoteBackups = async () => {
   }
 };
 
+// Actualizar campos (sin tocar el archivo) de un registro de backup
+const patchBackupRecord = async (recordId, data) => {
+  const response = await fetch(`${VPS_BASE_URL}/api/collections/backups/records/${recordId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    let detalle = '';
+    try {
+      detalle = await response.text();
+    } catch (e) {
+      // sin cuerpo legible
+    }
+    throw new Error(`HTTP ${response.status}: ${detalle}`);
+  }
+  return await response.json();
+};
+
+// Marca un registro como LOCK (alguien lo está editando ahora)
+const lockBackup = async (recordId, usuario) => {
+  return await patchBackupRecord(recordId, {
+    estado: 'LOCK',
+    notas: `Bloqueado por ${usuario} el ${new Date().toISOString()}`,
+  });
+};
+
+// Cierra un registro viejo (ya no es el más reciente ni está en edición)
+const closeBackup = async (recordId) => {
+  return await patchBackupRecord(recordId, { estado: 'CLOSED' });
+};
+
+// Busca si hay un registro actualmente bloqueado (alguien editando)
+const getActiveLock = async () => {
+  const backups = await listRemoteBackups();
+  return backups.find((b) => b.estado === 'LOCK') || null;
+};
+
 // Subir archivo al VPS
 export const uploadToVPS = async (localUri, usuario) => {
   try {
@@ -109,6 +147,7 @@ export const uploadToVPS = async (localUri, usuario) => {
           subidoPor: usuario,
           fechaSubida: new Date().toISOString(),
           fechaCargadoLocal: new Date().toISOString(),
+          estado: 'UNLOCK',
         })
       );
     } catch (e) {
@@ -139,15 +178,18 @@ export const downloadFromVPS = async (fileUrl) => {
   }
 };
 
-// Obtener el backup más reciente del VPS (UNLOCK), usando el campo real 'estado'
+// Obtener el backup más reciente del VPS. La descarga SIEMPRE está abierta,
+// sin importar si está LOCK (alguien editando) o UNLOCK (libre) — solo se
+// excluyen los cerrados (CLOSED, ya superados por uno más nuevo).
 export const getLatestBackup = async () => {
   const backups = await listRemoteBackups();
-  const unlockBackups = backups.filter((b) => b.estado === 'UNLOCK' && b.file);
-  if (unlockBackups.length === 0) return null;
+  const disponibles = backups.filter(
+    (b) => b.file && (b.estado === 'UNLOCK' || b.estado === 'LOCK')
+  );
+  if (disponibles.length === 0) return null;
 
-  // Ordenar por fecha de subida (más reciente primero)
-  unlockBackups.sort((a, b) => new Date(b.created) - new Date(a.created));
-  return unlockBackups[0];
+  disponibles.sort((a, b) => new Date(b.created) - new Date(a.created));
+  return disponibles[0];
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -188,11 +230,40 @@ export const loadFromVPS = async (usuario, onProgress) => {
             subidoPor: latestBackup.usuario || 'desconocido',
             fechaSubida: latestBackup.created,
             fechaCargadoLocal: new Date().toISOString(),
+            estado: latestBackup.estado,
           })
         );
       } catch (e) {
         console.warn('No se pudo guardar la info del backup cargado:', e);
       }
+
+      if (latestBackup.estado === 'UNLOCK') {
+        // Estaba libre: este usuario la toma para editar. Solo él podrá
+        // subir la próxima versión hasta que la suba (o hasta que un
+        // administrador libere el bloqueo manualmente en PocketBase).
+        try {
+          await lockBackup(latestBackup.id, usuario);
+          await AsyncStorage.setItem(
+            'miLockActual',
+            JSON.stringify({ recordId: latestBackup.id, fecha: new Date().toISOString() })
+          );
+          onProgress?.('🔒 Base de datos bloqueada para tu edición. Súbela cuando termines.');
+        } catch (lockError) {
+          console.error('No se pudo bloquear la base de datos:', lockError);
+          onProgress?.(
+            '⚠️ Se cargó la base de datos, pero no se pudo bloquear para tu edición. Avisa a los demás para que no editen ahora.'
+          );
+        }
+      } else {
+        // Ya estaba bloqueada por otra persona: esto es solo lectura,
+        // no reclamamos el bloqueo. Limpiar cualquier bloqueo local viejo
+        // de este dispositivo para no confundir un intento de subida futuro.
+        await AsyncStorage.removeItem('miLockActual');
+        onProgress?.(
+          '👀 Cargado en modo solo lectura: otra persona está editando la base de datos ahora mismo.'
+        );
+      }
+
       return true;
     }
 
@@ -221,6 +292,28 @@ export const getUltimoBackupInfo = async () => {
 // Guardar BD en el VPS (solo si es más reciente)
 export const saveToVPS = async (usuario, onProgress) => {
   try {
+    onProgress?.('🔒 Verificando si hay un bloqueo activo...');
+    const lockActivo = await getActiveLock();
+
+    let miLock = null;
+    try {
+      const raw = await AsyncStorage.getItem('miLockActual');
+      miLock = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      // sin lock local guardado
+    }
+
+    if (lockActivo && (!miLock || miLock.recordId !== lockActivo.id)) {
+      // Hay alguien más editando (o este dispositivo nunca la bajó/bloqueó)
+      const notas = lockActivo.notas || '';
+      const match = notas.match(/Bloqueado por (.+?) el/);
+      const quien = match ? match[1] : lockActivo.usuario || 'otra persona';
+      onProgress?.(
+        `🔒 No se puede subir: la base de datos está bloqueada por ${quien}, que la está editando ahora mismo. Espera a que termine y suba sus cambios, o pide a un administrador que libere el bloqueo manualmente en PocketBase.`
+      );
+      return false;
+    }
+
     onProgress?.('📤 Exportando base de datos local...');
     const exportPath = await exportDatabaseToFile(`temp_${Date.now()}.sql`);
 
@@ -233,6 +326,17 @@ export const saveToVPS = async (usuario, onProgress) => {
     const uploaded = await uploadToVPS(exportPath, usuario);
 
     if (uploaded) {
+      // Cerrar el registro que teníamos bloqueado (si había uno) y limpiar
+      // el bloqueo local — la base recién subida queda UNLOCK, libre para
+      // que cualquiera la tome después.
+      if (lockActivo && miLock && miLock.recordId === lockActivo.id) {
+        try {
+          await closeBackup(lockActivo.id);
+        } catch (e) {
+          console.warn('No se pudo cerrar el bloqueo anterior:', e);
+        }
+      }
+      await AsyncStorage.removeItem('miLockActual');
       onProgress?.('✅ Base de datos guardada en el servidor');
       return true;
     }
