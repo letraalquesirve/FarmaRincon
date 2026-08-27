@@ -27,7 +27,7 @@ import {
 } from 'lucide-react-native';
 import { getDaysUntilExpiry, formatDate, getExpiryCategory } from '../utils/dateUtils';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { loadFromVPS, saveToVPS, hasLocalData } from '../services/SyncService';
+import { loadFromVPS, saveToVPS, hasLocalData, getUltimoBackupInfo } from '../services/SyncService';
 import { initDatabase, checkTablesStatus, exportDatabaseToFile } from '../services/SQLiteService';
 import { medicamentosList, pedidosList, entregasList } from '../services/LocalDataService';
 
@@ -62,6 +62,28 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   // ─────────────────────────────────────────────────────────────
 
   // Cargar BD desde el servidor
+  // Muestra sobre qué backup está trabajando este celular (para orientar
+  // a quien usa la app sobre qué tan reciente es la información que ve)
+  const handleShowBackupInfo = async () => {
+    const info = await getUltimoBackupInfo();
+    if (!info) {
+      Alert.alert(
+        'Base de datos actual',
+        'Todavía no se ha cargado ningún respaldo del servidor en este celular. Estás viendo los datos creados directamente aquí.'
+      );
+      return;
+    }
+    const fechaSubida = info.fechaSubida ? formatDate(info.fechaSubida) : 'desconocida';
+    const fechaCargado = info.fechaCargadoLocal ? formatDate(info.fechaCargadoLocal) : 'desconocida';
+    Alert.alert(
+      'Base de datos actual',
+      `Archivo: ${info.filename || 'desconocido'}\n` +
+        `Subido por: ${info.subidoPor || 'desconocido'}\n` +
+        `Fecha del backup: ${fechaSubida}\n` +
+        `Cargado en este celular: ${fechaCargado}`
+    );
+  };
+
   const handleLoadFromServer = async () => {
     if (syncing) return;
 
@@ -360,7 +382,9 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
     >
       <View style={styles.header}>
         <View style={styles.headerRow}>
-          <Package color="white" size={28} />
+          <TouchableOpacity onPress={handleShowBackupInfo}>
+            <Package color="white" size={28} />
+          </TouchableOpacity>
           <Text style={styles.headerTitle}>FarmaRincón</Text>
           <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>
             <Key color="white" size={20} />

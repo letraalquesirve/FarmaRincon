@@ -1,5 +1,6 @@
 // src/services/SyncService.js
 import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { exportDatabaseToFile, importDatabaseFromFile, checkTablesStatus } from './SQLiteService';
 
 // Configuración
@@ -99,6 +100,20 @@ export const uploadToVPS = async (localUri, usuario) => {
     }
     const result = await response.json();
     console.log('✅ Backup subido al VPS:', result);
+    // Guardar de qué backup se trata, para poder mostrarlo luego en pantalla
+    try {
+      await AsyncStorage.setItem(
+        'ultimoBackupInfo',
+        JSON.stringify({
+          filename: nombreArchivo,
+          subidoPor: usuario,
+          fechaSubida: new Date().toISOString(),
+          fechaCargadoLocal: new Date().toISOString(),
+        })
+      );
+    } catch (e) {
+      console.warn('No se pudo guardar la info del backup subido:', e);
+    }
     return true;
   } catch (error) {
     console.error('❌ Error subiendo backup al VPS:', error);
@@ -164,6 +179,20 @@ export const loadFromVPS = async (usuario, onProgress) => {
 
     if (imported) {
       onProgress?.('✅ Base de datos restaurada exitosamente');
+      // Guardar de qué backup se cargó, para poder mostrarlo luego en pantalla
+      try {
+        await AsyncStorage.setItem(
+          'ultimoBackupInfo',
+          JSON.stringify({
+            filename: latestBackup.file,
+            subidoPor: latestBackup.usuario || 'desconocido',
+            fechaSubida: latestBackup.created,
+            fechaCargadoLocal: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn('No se pudo guardar la info del backup cargado:', e);
+      }
       return true;
     }
 
@@ -173,6 +202,19 @@ export const loadFromVPS = async (usuario, onProgress) => {
     console.error('Error en loadFromVPS:', error);
     onProgress?.(`❌ Error: ${error.message}`);
     return false;
+  }
+};
+
+// Devuelve la info del último backup del servidor que se cargó en este
+// celular (o null si nunca se ha cargado ninguno), para mostrarla en
+// pantalla y que quien usa la app sepa sobre qué datos está trabajando.
+export const getUltimoBackupInfo = async () => {
+  try {
+    const raw = await AsyncStorage.getItem('ultimoBackupInfo');
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    console.warn('No se pudo leer la info del backup cargado:', e);
+    return null;
   }
 };
 
