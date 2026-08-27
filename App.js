@@ -1,8 +1,8 @@
 // App.js
 import React, { useState, useEffect } from 'react';
-import { LogBox, View, ActivityIndicator, Platform, Dimensions, Alert } from 'react-native';
+import { LogBox, View, ActivityIndicator, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createDrawerNavigator } from '@react-navigation/drawer';
 import {
   Home,
   Package,
@@ -28,13 +28,14 @@ import PedidosScreen from './src/screens/PedidosScreen';
 import EntregasScreen from './src/screens/EntregasScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
 import LoginModal from './src/components/LoginModal';
+import CustomDrawerContent from './src/components/CustomDrawerContent';
 
 // ❌ NOTIFICACIONES PUSH COMENTADAS (offline-first)
 // import { registerForPushNotifications } from './src/services/NotificationService';
 
 LogBox.ignoreLogs(['Setting a timer for a long period of time']);
 
-const Tab = createBottomTabNavigator();
+const Drawer = createDrawerNavigator();
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
@@ -42,7 +43,6 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [geminiApiKey, setGeminiApiKey] = useState('');
-  const [bottomInset, setBottomInset] = useState(20);
 
   // ── Cargar usuario guardado al iniciar ──
   useEffect(() => {
@@ -61,19 +61,6 @@ export default function App() {
     };
 
     initializeApp();
-
-    if (Platform.OS === 'android') {
-      setTimeout(() => {
-        const { height: screenHeight } = Dimensions.get('window');
-        const { height: screenHeightFull } = Dimensions.get('screen');
-        const navigationBarHeight = screenHeightFull - screenHeight;
-        if (navigationBarHeight > 0) {
-          setBottomInset(navigationBarHeight + 10);
-        } else {
-          setBottomInset(32);
-        }
-      }, 100);
-    }
 
     return () => {
       isMounted = false;
@@ -163,18 +150,13 @@ export default function App() {
       <SafeAreaProvider>
         <NavigationContainer>
           {isLoggedIn ? (
-            <Tab.Navigator
+            <Drawer.Navigator
+              drawerContent={(props) => (
+                <CustomDrawerContent {...props} user={user} onLogout={handleLogout} />
+              )}
               screenOptions={{
-                tabBarActiveTintColor: '#7C3AED',
-                tabBarInactiveTintColor: '#9CA3AF',
-                tabBarStyle: {
-                  backgroundColor: 'white',
-                  borderTopWidth: 1,
-                  borderTopColor: '#E5E7EB',
-                  height: Platform.OS === 'android' ? 68 + bottomInset : 60,
-                  paddingBottom: Platform.OS === 'android' ? bottomInset : 5,
-                  paddingTop: 5,
-                },
+                drawerActiveTintColor: '#7C3AED',
+                drawerInactiveTintColor: '#4B5563',
                 headerStyle: {
                   backgroundColor: '#6B21A8',
                 },
@@ -184,11 +166,11 @@ export default function App() {
                 },
               }}
             >
-              <Tab.Screen
+              <Drawer.Screen
                 name="Inicio"
                 options={{
                   title: 'FarmaRincón',
-                  tabBarIcon: ({ color, size }) => <Home color={color} size={size} />,
+                  drawerIcon: ({ color, size }) => <Home color={color} size={size} />,
                 }}
               >
                 {(props) => (
@@ -199,63 +181,63 @@ export default function App() {
                     onLogout={handleLogout}
                   />
                 )}
-              </Tab.Screen>
+              </Drawer.Screen>
 
-              <Tab.Screen
+              <Drawer.Screen
                 name="Inventario"
                 options={{
                   title: 'Inventario',
-                  tabBarIcon: ({ color, size }) => <Package color={color} size={size} />,
+                  drawerIcon: ({ color, size }) => <Package color={color} size={size} />,
                   unmountOnBlur: true,
                 }}
               >
                 {(props) => <InventoryScreen {...props} user={user} />}
-              </Tab.Screen>
+              </Drawer.Screen>
 
               {isUserAdmin && (
-                <Tab.Screen
+                <Drawer.Screen
                   name="Registrar"
                   options={{
                     title: 'Registrar',
-                    tabBarIcon: ({ color, size }) => <PlusCircle color={color} size={size} />,
+                    drawerIcon: ({ color, size }) => <PlusCircle color={color} size={size} />,
                   }}
                 >
                   {(props) => <RegisterScreen {...props} user={user} />}
-                </Tab.Screen>
+                </Drawer.Screen>
               )}
 
               {isUserAdmin && (
-                <Tab.Screen
+                <Drawer.Screen
                   name="Entregas"
                   options={{
                     title: 'Entregas',
-                    tabBarIcon: ({ color, size }) => <MinusCircle color={color} size={size} />,
+                    drawerIcon: ({ color, size }) => <MinusCircle color={color} size={size} />,
                   }}
                 >
                   {(props) => <EntregasScreen {...props} user={user} />}
-                </Tab.Screen>
+                </Drawer.Screen>
               )}
 
-              <Tab.Screen
+              <Drawer.Screen
                 name="Pedidos"
                 options={{
                   title: 'Pedidos',
-                  tabBarIcon: ({ color, size }) => <ClipboardList color={color} size={size} />,
+                  drawerIcon: ({ color, size }) => <ClipboardList color={color} size={size} />,
                 }}
               >
                 {(props) => <PedidosScreen {...props} user={user} />}
-              </Tab.Screen>
+              </Drawer.Screen>
 
-              <Tab.Screen
+              <Drawer.Screen
                 name="Historial"
                 options={{
                   title: 'Historial',
-                  tabBarIcon: ({ color, size }) => <History color={color} size={size} />,
+                  drawerIcon: ({ color, size }) => <History color={color} size={size} />,
                 }}
               >
                 {(props) => <HistoryScreen {...props} user={user} />}
-              </Tab.Screen>
-            </Tab.Navigator>
+              </Drawer.Screen>
+            </Drawer.Navigator>
           ) : (
             <LoginModal visible={!isLoggedIn} onLogin={handleLogin} />
           )}
