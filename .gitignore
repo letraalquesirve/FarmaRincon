@@ -23,3 +23,6 @@ create-users.js
 cleanup-firebase.js
 create-categorias.js
 tokenExpo.txt
+
+__pycache__/
+*.pyc
