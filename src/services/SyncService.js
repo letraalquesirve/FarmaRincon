@@ -86,13 +86,21 @@ export const uploadToVPS = async (localUri, usuario) => {
       },
     });
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      let detalle = '';
+      try {
+        detalle = await response.text();
+      } catch (e) {
+        // sin cuerpo legible
+      }
+      throw new Error(`HTTP ${response.status}: ${detalle}`);
+    }
     const result = await response.json();
     console.log('✅ Backup subido al VPS:', result);
     return true;
   } catch (error) {
     console.error('❌ Error subiendo backup al VPS:', error);
-    return false;
+    throw error; // re-lanzar para que saveToVPS pueda mostrar el motivo real
   }
 };
 
