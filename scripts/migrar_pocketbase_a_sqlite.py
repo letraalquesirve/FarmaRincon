@@ -366,6 +366,24 @@ def migrar():
     conn.commit()
     conn.close()
 
+    total_registros = (
+        len(medicamentos) + len(pedidos) + len(entregas) + len(usuarios) + len(history) + len(categorias)
+    )
+    print(f"\n{'=' * 60}")
+    print(f"RESUMEN: {total_registros} registros migrados en total")
+    print(f"  medicamentos: {len(medicamentos)}")
+    print(f"  pedidos: {len(pedidos)}")
+    print(f"  entregas: {len(entregas)}")
+    print(f"  usuarios: {len(usuarios)}")
+    print(f"  history: {len(history)}")
+    print(f"  categorias: {len(categorias)}")
+    if total_registros == 0:
+        print("\n⚠️  ADVERTENCIA: no se migró NINGÚN registro. Antes de subir, revisa")
+        print("   los mensajes de arriba — probablemente hubo un error 401/403 leyendo")
+        print("   las colecciones (falta PB_AUTH_TOKEN), o los nombres de colección no")
+        print("   coinciden con los reales en tu PocketBase.")
+    print(f"{'=' * 60}")
+
     print(f"\n✅ Archivo generado: {os.path.abspath(OUTPUT_DB)}")
     return OUTPUT_DB
 
@@ -384,6 +402,12 @@ def subir_a_vps(filepath):
     with open(filepath, "rb") as f:
         file_data = f.read()
 
+    tamano_bytes = len(file_data)
+    print(f"\n📏 Tamaño real del archivo a subir: {tamano_bytes} bytes ({tamano_bytes/1024:.1f} KB)")
+    if tamano_bytes == 0:
+        print("⚠️  ADVERTENCIA: el archivo generado está vacío. No lo subas así,")
+        print("   revisa arriba cuántos registros se descargaron de cada colección.")
+
     def field(name, value):
         return (
             f"--{boundary}\r\n"
@@ -392,9 +416,11 @@ def subir_a_vps(filepath):
         ).encode("utf-8")
 
     body = b""
-    body += field("usuario", USUARIO_MIGRACION)
-    body += field("fecha_subida", ahora.isoformat())
-    body += field("filename", filename)
+    # Campos reales de la colección 'backups' en PocketBase (confirmados en el
+    # panel admin): field, file, estado, tamano_bytes, notas.
+    body += field("estado", "UNLOCK")
+    body += field("tamano_bytes", str(tamano_bytes))
+    body += field("notas", f"Migración inicial desde PocketBase, subida {ahora.isoformat()}")
     body += (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
@@ -428,6 +454,10 @@ if __name__ == "__main__":
     db_path = migrar()
 
     print("\n" + "=" * 60)
+    tamano_generado = os.path.getsize(db_path)
+    if tamano_generado < 20000:  # una BD con solo el esquema, sin datos, ronda ~80KB
+        print(f"⚠️  El archivo generado pesa solo {tamano_generado} bytes, sospechosamente")
+        print("   poco. Revisa el resumen de arriba antes de subir.")
     respuesta = input("¿Subir este archivo al servidor ahora? (s/n): ").strip().lower()
     if respuesta == "s":
         subir_a_vps(db_path)

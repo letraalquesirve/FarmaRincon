@@ -58,15 +58,25 @@ const listRemoteBackups = async () => {
 export const uploadToVPS = async (localUri, usuario) => {
   try {
     const nombreArchivo = generarNombreArchivo('UNLOCK', usuario);
+
+    let tamanoBytes = 0;
+    try {
+      const info = await FileSystem.getInfoAsync(localUri);
+      tamanoBytes = info.size || 0;
+    } catch (e) {
+      console.warn('No se pudo calcular el tamaño del archivo:', e);
+    }
+
     const formData = new FormData();
     formData.append('file', {
       uri: localUri,
       name: nombreArchivo,
       type: 'application/sql',
     });
-    formData.append('usuario', usuario);
-    formData.append('fecha_subida', new Date().toISOString());
-    formData.append('filename', nombreArchivo);
+    // Campos reales de la colección 'backups' en PocketBase
+    formData.append('estado', 'UNLOCK');
+    formData.append('tamano_bytes', String(tamanoBytes));
+    formData.append('notas', `Subido por ${usuario} el ${new Date().toISOString()}`);
 
     const response = await fetch(`${VPS_BASE_URL}/api/collections/backups/records`, {
       method: 'POST',
@@ -87,10 +97,10 @@ export const uploadToVPS = async (localUri, usuario) => {
 };
 
 // Descargar archivo del VPS
-export const downloadFromVPS = async (recordId, downloadUri) => {
+export const downloadFromVPS = async (fileUrl) => {
   try {
     const localPath = `${FileSystem.documentDirectory}downloaded_backup.sql`;
-    const downloadResult = await FileSystem.downloadAsync(downloadUri, localPath);
+    const downloadResult = await FileSystem.downloadAsync(fileUrl, localPath);
 
     if (downloadResult.status === 200) {
       console.log('✅ Backup descargado del VPS:', localPath);
@@ -103,10 +113,10 @@ export const downloadFromVPS = async (recordId, downloadUri) => {
   }
 };
 
-// Obtener el backup más reciente del VPS (UNLOCK)
+// Obtener el backup más reciente del VPS (UNLOCK), usando el campo real 'estado'
 export const getLatestBackup = async () => {
   const backups = await listRemoteBackups();
-  const unlockBackups = backups.filter((b) => b.filename?.startsWith('UNLOCK'));
+  const unlockBackups = backups.filter((b) => b.estado === 'UNLOCK' && b.file);
   if (unlockBackups.length === 0) return null;
 
   // Ordenar por fecha de subida (más reciente primero)
@@ -129,8 +139,9 @@ export const loadFromVPS = async (usuario, onProgress) => {
       return false;
     }
 
-    onProgress?.(`📥 Descargando: ${latestBackup.filename}...`);
-    const localPath = await downloadFromVPS(latestBackup.id, latestBackup.file);
+    onProgress?.(`📥 Descargando: ${latestBackup.file}...`);
+    const fileUrl = `${VPS_BASE_URL}/api/files/backups/${latestBackup.id}/${latestBackup.file}`;
+    const localPath = await downloadFromVPS(fileUrl);
 
     if (!localPath) {
       onProgress?.('❌ Error al descargar el backup');

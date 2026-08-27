@@ -76,11 +76,18 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
           onPress: async () => {
             setSyncing(true);
             try {
-              await loadFromVPS(user?.nombre || 'usuario', (mensaje) => {
+              const ok = await loadFromVPS(user?.nombre || 'usuario', (mensaje) => {
                 console.log('📡 Sync:', mensaje);
               });
-              Alert.alert('Éxito', 'Base de datos cargada desde el servidor');
-              await loadData(); // Recargar la UI
+              if (ok) {
+                Alert.alert('Éxito', 'Base de datos cargada desde el servidor');
+                await loadData(); // Recargar la UI
+              } else {
+                Alert.alert(
+                  'No se pudo cargar',
+                  'No se encontró ningún backup disponible en el servidor, o falló la descarga/importación.'
+                );
+              }
             } catch (error) {
               console.error('Error cargando desde servidor:', error);
               Alert.alert('Error', 'No se pudo cargar la base de datos desde el servidor');
@@ -107,10 +114,14 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
           onPress: async () => {
             setSyncing(true);
             try {
-              await saveToVPS(user?.nombre || 'usuario', (mensaje) => {
+              const ok = await saveToVPS(user?.nombre || 'usuario', (mensaje) => {
                 console.log('📡 Sync:', mensaje);
               });
-              Alert.alert('Éxito', 'Base de datos guardada en el servidor');
+              if (ok) {
+                Alert.alert('Éxito', 'Base de datos guardada en el servidor');
+              } else {
+                Alert.alert('No se pudo guardar', 'Falló la exportación o la subida al servidor.');
+              }
             } catch (error) {
               console.error('Error guardando en servidor:', error);
               Alert.alert('Error', 'No se pudo guardar la base de datos en el servidor');
