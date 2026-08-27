@@ -77,6 +77,8 @@ export const uploadToVPS = async (localUri, usuario) => {
     formData.append('estado', 'UNLOCK');
     formData.append('tamano_bytes', String(tamanoBytes));
     formData.append('notas', `Subido por ${usuario} el ${new Date().toISOString()}`);
+    formData.append('usuario', usuario);
+    formData.append('filename', nombreArchivo);
 
     const response = await fetch(`${VPS_BASE_URL}/api/collections/backups/records`, {
       method: 'POST',

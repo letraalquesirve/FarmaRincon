@@ -416,11 +416,15 @@ def subir_a_vps(filepath):
         ).encode("utf-8")
 
     body = b""
-    # Campos reales de la colección 'backups' en PocketBase (confirmados en el
-    # panel admin): field, file, estado, tamano_bytes, notas.
+    # Campos reales de la colección 'backups' en PocketBase (confirmados vía
+    # curl al endpoint real, no solo la vista del formulario admin, que no
+    # los mostraba a todos): field, file, estado, tamano_bytes, notas,
+    # filename, usuario. Estos dos últimos son obligatorios.
     body += field("estado", "UNLOCK")
     body += field("tamano_bytes", str(tamano_bytes))
     body += field("notas", f"Migración inicial desde PocketBase, subida {ahora.isoformat()}")
+    body += field("usuario", USUARIO_MIGRACION)
+    body += field("filename", filename)
     body += (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
