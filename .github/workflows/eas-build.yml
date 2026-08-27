@@ -1,0 +1,42 @@
+name: EAS Build (Android)
+
+# Dispara un build en la nube de EAS (Expo) cuando se sube algo a
+# sqlite-local, o manualmente desde la pestaña "Actions" de GitHub
+# ("Run workflow"). El build en sí corre en los servidores de Expo,
+# no en este runner de GitHub — este workflow solo lo pide y espera
+# el resultado.
+on:
+  push:
+    branches:
+      - sqlite-local
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Perfil de EAS a usar (preview, development, production)'
+        required: false
+        default: 'preview'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Configurar EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Lanzar build en EAS
+        run: eas build --platform android --profile ${{ github.event.inputs.profile || 'preview' }} --non-interactive
