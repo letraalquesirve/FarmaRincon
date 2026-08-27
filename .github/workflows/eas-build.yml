@@ -27,12 +27,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Configurar EAS
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Instalar dependencias
+        run: npm ci
 
       - name: Lanzar build en EAS
         run: eas build --platform android --profile ${{ github.event.inputs.profile || 'preview' }} --non-interactive
