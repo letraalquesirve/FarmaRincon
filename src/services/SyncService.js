@@ -1,5 +1,5 @@
 // src/services/SyncService.js
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { exportDatabaseToFile, importDatabaseFromFile, checkTablesStatus } from './SQLiteService';
 
 // Configuración
