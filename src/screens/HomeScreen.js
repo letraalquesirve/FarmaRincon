@@ -392,7 +392,7 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
           <TouchableOpacity onPress={handleShowBackupInfo}>
             <Package color="white" size={28} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>FarmaRincón</Text>
+          <Text style={styles.headerTitle}>Configuración</Text>
           <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>
             <Key color="white" size={20} />
           </TouchableOpacity>

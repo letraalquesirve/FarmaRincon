@@ -136,6 +136,18 @@ export const usuarioCreate = async (data) => {
   return record;
 };
 
+export const usuarioUpdate = async (id, data) => {
+  const existing = await SQLite.getUsuarioById(id);
+  if (!existing) throw new Error(`Usuario ${id} no encontrado`);
+  const merged = { ...existing, ...data, id };
+  await SQLite.saveUsuario(merged);
+  return merged;
+};
+
+export const usuarioDelete = async (id) => {
+  await SQLite.deleteUsuario(id);
+};
+
 // ───────────────────────── CATEGORIAS ─────────────────────────
 export const categoriasList = async () => {
   return await SQLite.getAllCategorias();

@@ -10,6 +10,7 @@ import {
   History,
   ClipboardList,
   MinusCircle,
+  Users,
 } from 'lucide-react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -26,6 +27,7 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import PedidosScreen from './src/screens/PedidosScreen';
 import EntregasScreen from './src/screens/EntregasScreen';
+import UsuariosScreen from './src/screens/UsuariosScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
 import LoginModal from './src/components/LoginModal';
 import CustomDrawerContent from './src/components/CustomDrawerContent';
@@ -237,6 +239,18 @@ export default function App() {
               >
                 {(props) => <HistoryScreen {...props} user={user} />}
               </Drawer.Screen>
+
+              {isUserAdmin && (
+                <Drawer.Screen
+                  name="Usuarios"
+                  options={{
+                    title: 'Usuarios',
+                    drawerIcon: ({ color, size }) => <Users color={color} size={size} />,
+                  }}
+                >
+                  {(props) => <UsuariosScreen {...props} user={user} />}
+                </Drawer.Screen>
+              )}
             </Drawer.Navigator>
           ) : (
             <LoginModal visible={!isLoggedIn} onLogin={handleLogin} />
