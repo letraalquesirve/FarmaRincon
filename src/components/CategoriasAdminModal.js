@@ -52,10 +52,10 @@ export default function CategoriasAdminModal({ visible, onClose }) {
   const generarPDFCategorias = async () => {
     setGenerandoPDF(true);
     try {
-      const todosMedicamentos = await medicamentosList(true); // solo activos
+      const todosMedicamentos = await medicamentosList(); // todos: activos e inactivos
 
       if (todosMedicamentos.length === 0) {
-        Alert.alert('Sin datos', 'No hay medicamentos activos para generar el PDF');
+        Alert.alert('Sin datos', 'No hay medicamentos registrados para generar el PDF');
         return;
       }
 
