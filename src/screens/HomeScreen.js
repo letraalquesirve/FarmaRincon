@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 import {
   Package,
   AlertCircle,
@@ -24,12 +25,21 @@ import {
   LogOut,
   Upload,
   Download,
+  Tag,
+  Share2,
+  FolderOpen,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry, formatDate, getExpiryCategory } from '../utils/dateUtils';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { loadFromVPS, saveToVPS, hasLocalData, getUltimoBackupInfo } from '../services/SyncService';
-import { initDatabase, checkTablesStatus, exportDatabaseToFile } from '../services/SQLiteService';
+import {
+  initDatabase,
+  checkTablesStatus,
+  exportDatabaseToFile,
+  importDatabaseFromFile,
+} from '../services/SQLiteService';
 import { medicamentosList, pedidosList, entregasList } from '../services/LocalDataService';
+import CategoriasAdminModal from '../components/CategoriasAdminModal';
 
 export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const navigation = useNavigation();
@@ -42,6 +52,8 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const [refreshing, setRefreshing] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [syncing, setSyncing] = useState(false); // Estado para sincronización
+  const [showCategoriasModal, setShowCategoriasModal] = useState(false);
+  const [transfiriendo, setTransfiriendo] = useState(false);
 
   // Estados para las listas filtradas
   const [porVencerList, setPorVencerList] = useState([]);
@@ -89,6 +101,83 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
         `Cargado en este celular: ${fechaCargado}\n` +
         `Estado: ${estadoTexto}`
     );
+  };
+
+  // Exportar la BD local y abrir el panel nativo de compartir de Android
+  // (Bluetooth, Nearby Share, guardar en Descargas, WhatsApp, etc.) - útil
+  // cuando no hay red para usar "Salvar BD y Cerrar" contra el servidor.
+  const handleCompartirBD = async () => {
+    setTransfiriendo(true);
+    try {
+      const disponible = await Sharing.isAvailableAsync();
+      if (!disponible) {
+        Alert.alert('No disponible', 'Este dispositivo no permite compartir archivos');
+        return;
+      }
+      const exportPath = await exportDatabaseToFile(`FarmaRincon_${Date.now()}.sql`);
+      if (!exportPath) {
+        Alert.alert('Error', 'No se pudo exportar la base de datos');
+        return;
+      }
+      await Sharing.shareAsync(exportPath, {
+        mimeType: 'application/octet-stream',
+        dialogTitle: 'Compartir base de datos (Bluetooth, USB, etc.)',
+      });
+    } catch (error) {
+      console.error('Error compartiendo BD:', error);
+      Alert.alert('Error', 'No se pudo compartir la base de datos');
+    } finally {
+      setTransfiriendo(false);
+    }
+  };
+
+  // Importar una BD recibida por Bluetooth/USB/etc. (ya guardada en el
+  // celular) sin depender del servidor
+  const handleImportarArchivo = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) return;
+
+      const fileUri = result.assets?.[0]?.uri;
+      if (!fileUri) {
+        Alert.alert('Error', 'No se pudo leer el archivo seleccionado');
+        return;
+      }
+
+      Alert.alert(
+        'Importar base de datos',
+        '¿Estás seguro? Esto reemplazará TODOS los datos locales con el contenido de ese archivo.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Importar',
+            onPress: async () => {
+              setTransfiriendo(true);
+              try {
+                const ok = await importDatabaseFromFile(fileUri);
+                if (ok) {
+                  Alert.alert('Éxito', 'Base de datos importada correctamente');
+                  await loadData();
+                } else {
+                  Alert.alert('Error', 'No se pudo importar ese archivo (¿es un backup válido?)');
+                }
+              } catch (error) {
+                console.error('Error importando archivo:', error);
+                Alert.alert('Error', 'No se pudo importar ese archivo');
+              } finally {
+                setTransfiriendo(false);
+              }
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Error seleccionando archivo:', error);
+      Alert.alert('Error', 'No se pudo abrir el selector de archivos');
+    }
   };
 
   const handleLoadFromServer = async () => {
@@ -383,10 +472,11 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
+    <>
+      <ScrollView
+        style={styles.container}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
       <View style={styles.header}>
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={handleShowBackupInfo}>
@@ -434,6 +524,42 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
           )}
         </TouchableOpacity>
       </View>
+
+      <View style={styles.syncButtonsContainer}>
+        <TouchableOpacity
+          style={[styles.syncButton, styles.syncButtonShare]}
+          onPress={handleCompartirBD}
+          disabled={transfiriendo}
+        >
+          {transfiriendo ? (
+            <ActivityIndicator size="small" color="white" />
+          ) : (
+            <>
+              <Share2 color="white" size={18} />
+              <Text style={styles.syncButtonText}>Compartir BD (sin red)</Text>
+            </>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.syncButton, styles.syncButtonImport]}
+          onPress={handleImportarArchivo}
+          disabled={transfiriendo}
+        >
+          {transfiriendo ? (
+            <ActivityIndicator size="small" color="white" />
+          ) : (
+            <>
+              <FolderOpen color="white" size={18} />
+              <Text style={styles.syncButtonText}>Importar de archivo</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity style={styles.categoriasButton} onPress={() => setShowCategoriasModal(true)}>
+        <Tag color="#7C3AED" size={18} />
+        <Text style={styles.categoriasButtonText}>Editar categorías y ubicaciones</Text>
+      </TouchableOpacity>
 
       <View style={styles.statsGrid}>
         <TouchableOpacity
@@ -601,6 +727,12 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
         </View>
       )}
     </ScrollView>
+
+      <CategoriasAdminModal
+        visible={showCategoriasModal}
+        onClose={() => setShowCategoriasModal(false)}
+      />
+    </>
   );
 }
 
@@ -652,6 +784,30 @@ const styles = StyleSheet.create({
   },
   syncButtonSave: {
     backgroundColor: '#10B981',
+  },
+  syncButtonShare: {
+    backgroundColor: '#F59E0B',
+  },
+  syncButtonImport: {
+    backgroundColor: '#8B5CF6',
+  },
+  categoriasButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    borderRadius: 12,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    marginBottom: 16,
+  },
+  categoriasButtonText: {
+    color: '#7C3AED',
+    fontWeight: '600',
+    fontSize: 13,
   },
   syncButtonText: {
     color: 'white',
