@@ -28,9 +28,9 @@ import {
   Tag,
   Share2,
   FolderOpen,
+  Users,
 } from 'lucide-react-native';
 import { getDaysUntilExpiry, formatDate, getExpiryCategory } from '../utils/dateUtils';
-import { normalizeSearchTerm } from '../utils/normalizeText';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { loadFromVPS, saveToVPS, hasLocalData, getUltimoBackupInfo } from '../services/SyncService';
 import {
@@ -39,11 +39,13 @@ import {
   exportDatabaseToFile,
   importDatabaseFromFile,
 } from '../services/SQLiteService';
-import { medicamentosList, pedidosList, entregasList, categoriasList } from '../services/LocalDataService';
+import { medicamentosList, pedidosList, entregasList } from '../services/LocalDataService';
 import CategoriasAdminModal from '../components/CategoriasAdminModal';
+import UsuariosScreen from './UsuariosScreen';
 
 export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const navigation = useNavigation();
+  const isUserAdmin = user?.tipo === 'admin';
 
   // Estados
   const [medicamentos, setMedicamentos] = useState([]);
@@ -54,6 +56,7 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [syncing, setSyncing] = useState(false); // Estado para sincronización
   const [showCategoriasModal, setShowCategoriasModal] = useState(false);
+  const [showUsuariosModal, setShowUsuariosModal] = useState(false);
   const [transfiriendo, setTransfiriendo] = useState(false);
 
   // Estados para las listas filtradas
@@ -427,110 +430,6 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
     ]);
   };
 
-  // PDF: catálogo completo agrupado por categoría, sin duplicados,
-  // solo nombre y presentación (no cantidad ni vencimiento - es un
-  // listado de referencia, no un reporte de existencias)
-  const generarPDFCategorias = async () => {
-    setGeneratingPDF(true);
-    try {
-      const [todosMedicamentos, todasCategorias] = await Promise.all([
-        medicamentosList(true), // solo activos - lo que hay en existencia
-        categoriasList(),
-      ]);
-
-      if (todosMedicamentos.length === 0) {
-        Alert.alert('Sin datos', 'No hay medicamentos activos para generar el PDF');
-        return;
-      }
-
-      // Quitar duplicados: misma combinación nombre + presentación
-      // (sin distinguir mayúsculas/acentos ni espacios de sobra). Se
-      // normaliza cada campo por separado y se usa una clave compuesta
-      // (no concatenada) para no arriesgar colisiones de texto.
-      const vistos = new Set();
-      const sinDuplicados = [];
-      for (const med of todosMedicamentos) {
-        const clave = JSON.stringify([
-          normalizeSearchTerm(med.nombre || ''),
-          normalizeSearchTerm(med.presentacion || ''),
-        ]);
-        if (!vistos.has(clave)) {
-          vistos.add(clave);
-          sinDuplicados.push(med);
-        }
-      }
-
-      // Agrupar por categoría (las que no tengan, van a "Sin categoría")
-      const grupos = {};
-      for (const med of sinDuplicados) {
-        const cat = (med.categoria || '').trim() || 'Sin categoría';
-        if (!grupos[cat]) grupos[cat] = [];
-        grupos[cat].push(med);
-      }
-
-      // Orden: categorías alfabéticas (respetando el orden ya definido en
-      // la tabla de categorías si existe, y dejando "Sin categoría" al final),
-      // y dentro de cada una, medicamentos alfabéticos por nombre
-      const nombresCategoriasOrdenados = todasCategorias.map((c) => c.nombre);
-      const categoriasPresentes = Object.keys(grupos).sort((a, b) => {
-        if (a === 'Sin categoría') return 1;
-        if (b === 'Sin categoría') return -1;
-        const idxA = nombresCategoriasOrdenados.indexOf(a);
-        const idxB = nombresCategoriasOrdenados.indexOf(b);
-        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-        return a.localeCompare(b);
-      });
-
-      let seccionesHtml = '';
-      let totalListado = 0;
-      for (const categoria of categoriasPresentes) {
-        const items = [...grupos[categoria]].sort((a, b) =>
-          (a.nombre || '').localeCompare(b.nombre || '')
-        );
-        totalListado += items.length;
-        const filas = items
-          .map(
-            (med) => `
-              <tr>
-                <td style="padding:6px 8px;border:1px solid #ddd;">${med.nombre || ''}</td>
-                <td style="padding:6px 8px;border:1px solid #ddd;">${med.presentacion || ''}</td>
-              </tr>`
-          )
-          .join('');
-        seccionesHtml += `
-          <h3 style="background:#F5F3FF;color:#7C3AED;padding:8px;margin-top:20px;">
-            ${categoria} (${items.length})
-          </h3>
-          <table style="width:100%;border-collapse:collapse;">
-            <thead>
-              <tr>
-                <th style="text-align:left;padding:6px 8px;background:#EDE9FE;">Nombre</th>
-                <th style="text-align:left;padding:6px 8px;background:#EDE9FE;">Presentación</th>
-              </tr>
-            </thead>
-            <tbody>${filas}</tbody>
-          </table>`;
-      }
-
-      const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-        <title>Catálogo de medicamentos</title>
-        <style>body{font-family:Arial;padding:20px}</style></head>
-        <body>
-          <h2>Catálogo de medicamentos por categoría</h2>
-          <p>Total (sin duplicados): ${totalListado}</p>
-          ${seccionesHtml}
-        </body></html>`;
-
-      const { uri } = await Print.printToFileAsync({ html });
-      await Sharing.shareAsync(uri, { mimeType: 'application/pdf' });
-    } catch (error) {
-      console.error('Error generando PDF de categorías:', error);
-      Alert.alert('Error', 'No se pudo generar el PDF');
-    } finally {
-      setGeneratingPDF(false);
-    }
-  };
-
   // PDF
   const generatePDFForList = async (lista, title) => {
     if (!lista || lista.length === 0) {
@@ -588,6 +487,19 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
             <Package color="white" size={28} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Configuración</Text>
+          {isUserAdmin && (
+            <TouchableOpacity style={styles.apiKeyButton} onPress={() => setShowUsuariosModal(true)}>
+              <Users color="white" size={20} />
+            </TouchableOpacity>
+          )}
+          {isUserAdmin && (
+            <TouchableOpacity
+              style={styles.apiKeyButton}
+              onPress={() => setShowCategoriasModal(true)}
+            >
+              <Tag color="white" size={20} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>
             <Key color="white" size={20} />
           </TouchableOpacity>
@@ -660,26 +572,6 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
           )}
         </TouchableOpacity>
       </View>
-
-      <TouchableOpacity style={styles.categoriasButton} onPress={() => setShowCategoriasModal(true)}>
-        <Tag color="#7C3AED" size={18} />
-        <Text style={styles.categoriasButtonText}>Editar categorías y ubicaciones</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={styles.categoriasButton}
-        onPress={generarPDFCategorias}
-        disabled={generatingPDF}
-      >
-        {generatingPDF ? (
-          <ActivityIndicator size="small" color="#7C3AED" />
-        ) : (
-          <>
-            <FileText color="#7C3AED" size={18} />
-            <Text style={styles.categoriasButtonText}>PDF: catálogo por categorías</Text>
-          </>
-        )}
-      </TouchableOpacity>
 
       <View style={styles.statsGrid}>
         <TouchableOpacity
@@ -852,6 +744,12 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
         visible={showCategoriasModal}
         onClose={() => setShowCategoriasModal(false)}
       />
+
+      <UsuariosScreen
+        visible={showUsuariosModal}
+        onClose={() => setShowUsuariosModal(false)}
+        user={user}
+      />
     </>
   );
 }
@@ -935,21 +833,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', padding: 12, gap: 12 },
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', padding: 12, gap: 8 },
   statCard: {
     flex: 1,
     minWidth: '45%',
     backgroundColor: 'white',
-    padding: 15,
-    borderRadius: 16,
+    padding: 8,
+    borderRadius: 12,
     alignItems: 'center',
     elevation: 2,
   },
   statVigente: { backgroundColor: '#DCFCE7' },
   statPorVencer: { backgroundColor: '#FFEDD5' },
   statVencido: { backgroundColor: '#FEE2E2' },
-  statNumber: { fontSize: 28, fontWeight: 'bold', color: '#1F2937' },
-  statLabel: { fontSize: 12, color: '#6B7280', marginTop: 5 },
+  statNumber: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
+  statLabel: { fontSize: 10, color: '#6B7280', marginTop: 2 },
   pdfIconButton: { marginLeft: 8, padding: 4 },
   section: { backgroundColor: 'white', margin: 12, borderRadius: 12, padding: 12, elevation: 2 },
   sectionHeader: {

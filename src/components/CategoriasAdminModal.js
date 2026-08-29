@@ -11,14 +11,18 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { Tag, Plus, MapPin, Trash2, X, Check } from 'lucide-react-native';
+import { Tag, Plus, MapPin, Trash2, X, Check, FileText } from 'lucide-react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import {
   categoriasList,
   categoriaCreate,
   categoriaUpdate,
   categoriaDelete,
   categoriaGetByNombre,
+  medicamentosList,
 } from '../services/LocalDataService';
+import { normalizeSearchTerm } from '../utils/normalizeText';
 
 export default function CategoriasAdminModal({ visible, onClose }) {
   const [categorias, setCategorias] = useState([]);
@@ -28,6 +32,7 @@ export default function CategoriasAdminModal({ visible, onClose }) {
   const [nombreForm, setNombreForm] = useState('');
   const [ubicacionForm, setUbicacionForm] = useState('');
   const [guardando, setGuardando] = useState(false);
+  const [generandoPDF, setGenerandoPDF] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -40,6 +45,107 @@ export default function CategoriasAdminModal({ visible, onClose }) {
       setLoading(false);
     }
   }, []);
+
+  // PDF: catálogo completo agrupado por categoría, sin duplicados,
+  // solo nombre y presentación (no cantidad ni vencimiento - es un
+  // listado de referencia, no un reporte de existencias)
+  const generarPDFCategorias = async () => {
+    setGenerandoPDF(true);
+    try {
+      const todosMedicamentos = await medicamentosList(true); // solo activos
+
+      if (todosMedicamentos.length === 0) {
+        Alert.alert('Sin datos', 'No hay medicamentos activos para generar el PDF');
+        return;
+      }
+
+      // Quitar duplicados: misma combinación nombre + presentación
+      // (sin distinguir mayúsculas/acentos ni espacios de sobra). Se
+      // normaliza cada campo por separado y se usa una clave compuesta
+      // (no concatenada) para no arriesgar colisiones de texto.
+      const vistos = new Set();
+      const sinDuplicados = [];
+      for (const med of todosMedicamentos) {
+        const clave = JSON.stringify([
+          normalizeSearchTerm(med.nombre || ''),
+          normalizeSearchTerm(med.presentacion || ''),
+        ]);
+        if (!vistos.has(clave)) {
+          vistos.add(clave);
+          sinDuplicados.push(med);
+        }
+      }
+
+      // Agrupar por categoría (las que no tengan, van a "Sin categoría")
+      const grupos = {};
+      for (const med of sinDuplicados) {
+        const cat = (med.categoria || '').trim() || 'Sin categoría';
+        if (!grupos[cat]) grupos[cat] = [];
+        grupos[cat].push(med);
+      }
+
+      // Orden: categorías alfabéticas (respetando el orden ya definido en
+      // la tabla de categorías si existe, y dejando "Sin categoría" al final),
+      // y dentro de cada una, medicamentos alfabéticos por nombre
+      const nombresCategoriasOrdenados = categorias.map((c) => c.nombre);
+      const categoriasPresentes = Object.keys(grupos).sort((a, b) => {
+        if (a === 'Sin categoría') return 1;
+        if (b === 'Sin categoría') return -1;
+        const idxA = nombresCategoriasOrdenados.indexOf(a);
+        const idxB = nombresCategoriasOrdenados.indexOf(b);
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        return a.localeCompare(b);
+      });
+
+      let seccionesHtml = '';
+      let totalListado = 0;
+      for (const categoria of categoriasPresentes) {
+        const items = [...grupos[categoria]].sort((a, b) =>
+          (a.nombre || '').localeCompare(b.nombre || '')
+        );
+        totalListado += items.length;
+        const filas = items
+          .map(
+            (med) => `
+              <tr>
+                <td style="padding:6px 8px;border:1px solid #ddd;">${med.nombre || ''}</td>
+                <td style="padding:6px 8px;border:1px solid #ddd;">${med.presentacion || ''}</td>
+              </tr>`
+          )
+          .join('');
+        seccionesHtml += `
+          <h3 style="background:#F5F3FF;color:#7C3AED;padding:8px;margin-top:20px;">
+            ${categoria} (${items.length})
+          </h3>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:6px 8px;background:#EDE9FE;">Nombre</th>
+                <th style="text-align:left;padding:6px 8px;background:#EDE9FE;">Presentación</th>
+              </tr>
+            </thead>
+            <tbody>${filas}</tbody>
+          </table>`;
+      }
+
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Catálogo de medicamentos</title>
+        <style>body{font-family:Arial;padding:20px}</style></head>
+        <body>
+          <h2>Catálogo de medicamentos por categoría</h2>
+          <p>Total (sin duplicados): ${totalListado}</p>
+          ${seccionesHtml}
+        </body></html>`;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf' });
+    } catch (error) {
+      console.error('Error generando PDF de categorías:', error);
+      Alert.alert('Error', 'No se pudo generar el PDF');
+    } finally {
+      setGenerandoPDF(false);
+    }
+  };
 
   useEffect(() => {
     if (visible) {
@@ -153,9 +259,18 @@ export default function CategoriasAdminModal({ visible, onClose }) {
             <Tag color="#7C3AED" size={24} />
             <Text style={styles.headerTitle}>Categorías ({categorias.length})</Text>
           </View>
-          <TouchableOpacity onPress={onClose}>
-            <X color="#6B7280" size={26} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+            <TouchableOpacity onPress={generarPDFCategorias} disabled={generandoPDF}>
+              {generandoPDF ? (
+                <ActivityIndicator size="small" color="#7C3AED" />
+              ) : (
+                <FileText color="#7C3AED" size={24} />
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onClose}>
+              <X color="#6B7280" size={26} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         <Text style={styles.hint}>

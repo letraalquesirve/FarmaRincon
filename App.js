@@ -2,17 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { LogBox, View, ActivityIndicator, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
-import { createDrawerNavigator } from '@react-navigation/drawer';
-import {
-  Home,
-  Package,
-  PlusCircle,
-  History,
-  ClipboardList,
-  MinusCircle,
-  Users,
-} from 'lucide-react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Home, Package, PlusCircle, History, ClipboardList, MinusCircle } from 'lucide-react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -27,17 +19,117 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import PedidosScreen from './src/screens/PedidosScreen';
 import EntregasScreen from './src/screens/EntregasScreen';
-import UsuariosScreen from './src/screens/UsuariosScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
 import LoginModal from './src/components/LoginModal';
-import CustomDrawerContent from './src/components/CustomDrawerContent';
 
 // ❌ NOTIFICACIONES PUSH COMENTADAS (offline-first)
 // import { registerForPushNotifications } from './src/services/NotificationService';
 
 LogBox.ignoreLogs(['Setting a timer for a long period of time']);
 
-const Drawer = createDrawerNavigator();
+const Tab = createBottomTabNavigator();
+
+// Envuelto en un componente aparte porque useSafeAreaInsets() necesita estar
+// DENTRO de <SafeAreaProvider> para funcionar - no se puede llamar en el
+// mismo componente que lo declara.
+function AppNavigator({ user, isUserAdmin, onOpenApiKeyModal, onLogout }) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        tabBarActiveTintColor: '#7C3AED',
+        tabBarInactiveTintColor: '#9CA3AF',
+        tabBarStyle: {
+          backgroundColor: 'white',
+          borderTopWidth: 1,
+          borderTopColor: '#E5E7EB',
+          // insets.bottom es el valor REAL que reporta Android para lo que
+          // sea que tenga activo (3 botones, gestos, 2 botones) - se
+          // actualiza solo si la persona cambia el modo de navegación en
+          // Ajustes, sin que la app tenga que adivinar nada.
+          height: 60 + insets.bottom,
+          paddingBottom: insets.bottom > 0 ? insets.bottom : 5,
+          paddingTop: 5,
+        },
+        headerStyle: {
+          backgroundColor: '#6B21A8',
+        },
+        headerTintColor: 'white',
+        headerTitleStyle: {
+          fontWeight: 'bold',
+        },
+      }}
+    >
+      <Tab.Screen
+        name="Inicio"
+        options={{
+          title: 'FarmaRincón',
+          tabBarIcon: ({ color, size }) => <Home color={color} size={size} />,
+        }}
+      >
+        {(props) => (
+          <HomeScreen {...props} user={user} onOpenApiKeyModal={onOpenApiKeyModal} onLogout={onLogout} />
+        )}
+      </Tab.Screen>
+
+      <Tab.Screen
+        name="Inventario"
+        options={{
+          title: 'Inventario',
+          tabBarIcon: ({ color, size }) => <Package color={color} size={size} />,
+          unmountOnBlur: true,
+        }}
+      >
+        {(props) => <InventoryScreen {...props} user={user} />}
+      </Tab.Screen>
+
+      {isUserAdmin && (
+        <Tab.Screen
+          name="Registrar"
+          options={{
+            title: 'Registrar',
+            tabBarIcon: ({ color, size }) => <PlusCircle color={color} size={size} />,
+          }}
+        >
+          {(props) => <RegisterScreen {...props} user={user} />}
+        </Tab.Screen>
+      )}
+
+      {isUserAdmin && (
+        <Tab.Screen
+          name="Entregas"
+          options={{
+            title: 'Entregas',
+            tabBarIcon: ({ color, size }) => <MinusCircle color={color} size={size} />,
+          }}
+        >
+          {(props) => <EntregasScreen {...props} user={user} />}
+        </Tab.Screen>
+      )}
+
+      <Tab.Screen
+        name="Pedidos"
+        options={{
+          title: 'Pedidos',
+          tabBarIcon: ({ color, size }) => <ClipboardList color={color} size={size} />,
+        }}
+      >
+        {(props) => <PedidosScreen {...props} user={user} />}
+      </Tab.Screen>
+
+      <Tab.Screen
+        name="Historial"
+        options={{
+          title: 'Historial',
+          tabBarIcon: ({ color, size }) => <History color={color} size={size} />,
+        }}
+      >
+        {(props) => <HistoryScreen {...props} user={user} />}
+      </Tab.Screen>
+    </Tab.Navigator>
+  );
+}
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
@@ -152,106 +244,12 @@ export default function App() {
       <SafeAreaProvider>
         <NavigationContainer>
           {isLoggedIn ? (
-            <Drawer.Navigator
-              drawerContent={(props) => (
-                <CustomDrawerContent {...props} user={user} onLogout={handleLogout} />
-              )}
-              screenOptions={{
-                drawerActiveTintColor: '#7C3AED',
-                drawerInactiveTintColor: '#4B5563',
-                headerStyle: {
-                  backgroundColor: '#6B21A8',
-                },
-                headerTintColor: 'white',
-                headerTitleStyle: {
-                  fontWeight: 'bold',
-                },
-              }}
-            >
-              <Drawer.Screen
-                name="Inicio"
-                options={{
-                  title: 'FarmaRincón',
-                  drawerIcon: ({ color, size }) => <Home color={color} size={size} />,
-                }}
-              >
-                {(props) => (
-                  <HomeScreen
-                    {...props}
-                    user={user}
-                    onOpenApiKeyModal={() => setShowApiKeyModal(true)}
-                    onLogout={handleLogout}
-                  />
-                )}
-              </Drawer.Screen>
-
-              <Drawer.Screen
-                name="Inventario"
-                options={{
-                  title: 'Inventario',
-                  drawerIcon: ({ color, size }) => <Package color={color} size={size} />,
-                  unmountOnBlur: true,
-                }}
-              >
-                {(props) => <InventoryScreen {...props} user={user} />}
-              </Drawer.Screen>
-
-              {isUserAdmin && (
-                <Drawer.Screen
-                  name="Registrar"
-                  options={{
-                    title: 'Registrar',
-                    drawerIcon: ({ color, size }) => <PlusCircle color={color} size={size} />,
-                  }}
-                >
-                  {(props) => <RegisterScreen {...props} user={user} />}
-                </Drawer.Screen>
-              )}
-
-              {isUserAdmin && (
-                <Drawer.Screen
-                  name="Entregas"
-                  options={{
-                    title: 'Entregas',
-                    drawerIcon: ({ color, size }) => <MinusCircle color={color} size={size} />,
-                  }}
-                >
-                  {(props) => <EntregasScreen {...props} user={user} />}
-                </Drawer.Screen>
-              )}
-
-              <Drawer.Screen
-                name="Pedidos"
-                options={{
-                  title: 'Pedidos',
-                  drawerIcon: ({ color, size }) => <ClipboardList color={color} size={size} />,
-                }}
-              >
-                {(props) => <PedidosScreen {...props} user={user} />}
-              </Drawer.Screen>
-
-              <Drawer.Screen
-                name="Historial"
-                options={{
-                  title: 'Historial',
-                  drawerIcon: ({ color, size }) => <History color={color} size={size} />,
-                }}
-              >
-                {(props) => <HistoryScreen {...props} user={user} />}
-              </Drawer.Screen>
-
-              {isUserAdmin && (
-                <Drawer.Screen
-                  name="Usuarios"
-                  options={{
-                    title: 'Usuarios',
-                    drawerIcon: ({ color, size }) => <Users color={color} size={size} />,
-                  }}
-                >
-                  {(props) => <UsuariosScreen {...props} user={user} />}
-                </Drawer.Screen>
-              )}
-            </Drawer.Navigator>
+            <AppNavigator
+              user={user}
+              isUserAdmin={isUserAdmin}
+              onOpenApiKeyModal={() => setShowApiKeyModal(true)}
+              onLogout={handleLogout}
+            />
           ) : (
             <LoginModal visible={!isLoggedIn} onLogin={handleLogin} />
           )}

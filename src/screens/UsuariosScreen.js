@@ -1,5 +1,5 @@
 // src/screens/UsuariosScreen.js
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,6 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import { Users, Plus, Shield, User as UserIcon, Trash2, X, Check } from 'lucide-react-native';
 import {
   usuariosList,
@@ -21,7 +20,7 @@ import {
   usuarioGetByNombre,
 } from '../services/LocalDataService';
 
-export default function UsuariosScreen({ user: usuarioActual }) {
+export default function UsuariosScreen({ visible, onClose, user: usuarioActual }) {
   const [usuarios, setUsuarios] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
@@ -42,11 +41,12 @@ export default function UsuariosScreen({ user: usuarioActual }) {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
+  useEffect(() => {
+    if (visible) {
+      setLoading(true);
       cargarUsuarios();
-    }, [cargarUsuarios])
-  );
+    }
+  }, [visible, cargarUsuarios]);
 
   const abrirCrear = () => {
     setEditando(null);
@@ -147,104 +147,103 @@ export default function UsuariosScreen({ user: usuarioActual }) {
     </TouchableOpacity>
   );
 
-  if (loading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#7C3AED" />
-      </View>
-    );
-  }
-
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Users color="#7C3AED" size={26} />
-        <Text style={styles.headerTitle}>Usuarios ({usuarios.length})</Text>
-      </View>
-
-      <FlatList
-        data={usuarios}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-        ListEmptyComponent={
-          <Text style={styles.emptyText}>No hay usuarios registrados todavía</Text>
-        }
-      />
-
-      <TouchableOpacity style={styles.fab} onPress={abrirCrear}>
-        <Plus color="white" size={26} />
-      </TouchableOpacity>
-
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {editando ? 'Editar usuario' : 'Nuevo usuario'}
-              </Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
-                <X color="#6B7280" size={24} />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.label}>Nombre (con esto inicia sesión)</Text>
-            <TextInput
-              style={styles.input}
-              value={nombreForm}
-              onChangeText={setNombreForm}
-              placeholder="ej. Maria"
-              autoCapitalize="words"
-              autoCorrect={false}
-            />
-
-            <Text style={styles.label}>Rol</Text>
-            <View style={styles.tipoRow}>
-              <TouchableOpacity
-                style={[styles.tipoOption, tipoForm === 'user' && styles.tipoOptionActive]}
-                onPress={() => setTipoForm('user')}
-              >
-                <UserIcon color={tipoForm === 'user' ? 'white' : '#6B7280'} size={18} />
-                <Text
-                  style={[styles.tipoOptionText, tipoForm === 'user' && styles.tipoOptionTextActive]}
-                >
-                  Usuario (solo lectura)
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tipoOption, tipoForm === 'admin' && styles.tipoOptionActive]}
-                onPress={() => setTipoForm('admin')}
-              >
-                <Shield color={tipoForm === 'admin' ? 'white' : '#6B7280'} size={18} />
-                <Text
-                  style={[
-                    styles.tipoOptionText,
-                    tipoForm === 'admin' && styles.tipoOptionTextActive,
-                  ]}
-                >
-                  Administrador
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={styles.saveButton}
-              onPress={guardar}
-              disabled={guardando}
-            >
-              {guardando ? (
-                <ActivityIndicator color="white" size="small" />
-              ) : (
-                <>
-                  <Check color="white" size={20} />
-                  <Text style={styles.saveButtonText}>Guardar</Text>
-                </>
-              )}
-            </TouchableOpacity>
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <Users color="#7C3AED" size={26} />
+            <Text style={styles.headerTitle}>Usuarios ({usuarios.length})</Text>
           </View>
+          <TouchableOpacity onPress={onClose}>
+            <X color="#6B7280" size={26} />
+          </TouchableOpacity>
         </View>
-      </Modal>
-    </View>
+
+        {loading ? (
+          <ActivityIndicator size="large" color="#7C3AED" style={{ marginTop: 40 }} />
+        ) : (
+          <FlatList
+            data={usuarios}
+            keyExtractor={(item) => item.id}
+            renderItem={renderItem}
+            contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+            ListEmptyComponent={
+              <Text style={styles.emptyText}>No hay usuarios registrados todavía</Text>
+            }
+          />
+        )}
+
+        <TouchableOpacity style={styles.fab} onPress={abrirCrear}>
+          <Plus color="white" size={26} />
+        </TouchableOpacity>
+
+        <Modal visible={modalVisible} animationType="slide" transparent>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>
+                  {editando ? 'Editar usuario' : 'Nuevo usuario'}
+                </Text>
+                <TouchableOpacity onPress={() => setModalVisible(false)}>
+                  <X color="#6B7280" size={24} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.label}>Nombre (con esto inicia sesión)</Text>
+              <TextInput
+                style={styles.input}
+                value={nombreForm}
+                onChangeText={setNombreForm}
+                placeholder="ej. Maria"
+                autoCapitalize="words"
+                autoCorrect={false}
+              />
+
+              <Text style={styles.label}>Rol</Text>
+              <View style={styles.tipoRow}>
+                <TouchableOpacity
+                  style={[styles.tipoOption, tipoForm === 'user' && styles.tipoOptionActive]}
+                  onPress={() => setTipoForm('user')}
+                >
+                  <UserIcon color={tipoForm === 'user' ? 'white' : '#6B7280'} size={18} />
+                  <Text
+                    style={[styles.tipoOptionText, tipoForm === 'user' && styles.tipoOptionTextActive]}
+                  >
+                    Usuario (solo lectura)
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.tipoOption, tipoForm === 'admin' && styles.tipoOptionActive]}
+                  onPress={() => setTipoForm('admin')}
+                >
+                  <Shield color={tipoForm === 'admin' ? 'white' : '#6B7280'} size={18} />
+                  <Text
+                    style={[
+                      styles.tipoOptionText,
+                      tipoForm === 'admin' && styles.tipoOptionTextActive,
+                    ]}
+                  >
+                    Administrador
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity style={styles.saveButton} onPress={guardar} disabled={guardando}>
+                {guardando ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <>
+                    <Check color="white" size={20} />
+                    <Text style={styles.saveButtonText}>Guardar</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    </Modal>
   );
 }
 
@@ -253,9 +252,10 @@ const styles = StyleSheet.create({
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
   header: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 10,
     padding: 16,
+    paddingTop: 50,
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
