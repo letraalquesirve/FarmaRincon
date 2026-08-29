@@ -40,9 +40,6 @@ export const SearchHeader = ({
           onSubmitEditing={handleSubmitSearch}
           returnKeyType="search"
         />
-        <TouchableOpacity style={styles.searchButton} onPress={handleSubmitSearch}>
-          <Text style={styles.searchButtonText}>Buscar</Text>
-        </TouchableOpacity>
         {searchInputValue !== '' && (
           <TouchableOpacity onPress={limpiarBusqueda}>
             <X color="#9CA3AF" size={20} />

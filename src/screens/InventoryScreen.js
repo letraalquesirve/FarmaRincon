@@ -187,6 +187,16 @@ export default function InventoryScreen({ user }) {
     [modoInactivos, searchInputValue, filter]
   );
 
+  // Búsqueda en vivo: cada cambio de texto, filtro o modo (activos/inactivos)
+  // recarga la lista automáticamente, sin necesitar un botón "Buscar".
+  // Pequeño debounce para no re-filtrar en cada tecla si se escribe rápido.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      ejecutarBusqueda(searchInputValue, filter);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [searchInputValue, filter, modoInactivos, ejecutarBusqueda]);
+
   // Procesar parámetros de navegación - SIEMPRE se ejecuta cuando la pantalla recibe nuevos params
   useEffect(() => {
     const params = route?.params || {};
@@ -238,9 +248,8 @@ export default function InventoryScreen({ user }) {
         console.log(`🔍 Ejecutando búsqueda con filtro: ${filtroType}`);
         ejecutarBusqueda('', filtroType);
       } else {
-        console.log('🔍 Sin parámetros de búsqueda, mostrando pantalla vacía');
-        setResultados([]);
-        setHaBuscado(false);
+        console.log('🔍 Sin parámetros de búsqueda - cargando lista completa');
+        ejecutarBusqueda(medicamentoNombre, filtroType);
       }
     }, 100);
   }, [
@@ -263,16 +272,10 @@ export default function InventoryScreen({ user }) {
     ejecutarBusqueda(termino, filter);
   };
 
-  // Cambiar filtro de vigencia
+  // Cambiar filtro de vigencia (el efecto de búsqueda en vivo recarga solo)
   const handleFilterChange = (nuevoFiltro) => {
     console.log('🔄 Cambiando filtro de:', filter, 'a:', nuevoFiltro);
     setFilter(nuevoFiltro);
-
-    if (haBuscado || searchInputValue) {
-      setTimeout(() => {
-        ejecutarBusqueda(searchInputValue, nuevoFiltro);
-      }, 0);
-    }
   };
 
   // Cambiar entre activos/inactivos
@@ -282,8 +285,7 @@ export default function InventoryScreen({ user }) {
     setModoInactivos(nuevoModo);
     setFilter('todos');
     setSearchInputValue('');
-    setResultados([]);
-    setHaBuscado(false);
+    // El efecto de búsqueda en vivo recarga la lista completa del nuevo modo
   };
 
   // Refrescar (pull to refresh)
@@ -294,12 +296,11 @@ export default function InventoryScreen({ user }) {
     setRefreshing(false);
   }, [ejecutarBusqueda, searchInputValue, filter, haBuscado]);
 
-  // Función para limpiar completamente la búsqueda
+  // Función para limpiar el texto de búsqueda (vuelve a mostrar la lista completa)
   const limpiarTodo = () => {
     setSearchInputValue('');
-    setResultados([]);
-    setHaBuscado(false);
     setFilter('todos');
+    // El efecto de búsqueda en vivo recarga la lista completa
   };
 
   useFocusEffect(
@@ -675,11 +676,9 @@ export default function InventoryScreen({ user }) {
             <Package color="#D1D5DB" size={64} />
             <Text style={styles.emptyTitle}>No hay medicamentos</Text>
             <Text style={styles.emptyText}>
-              {!haBuscado
-                ? 'Escribe un nombre y presiona "Buscar" para encontrar medicamentos'
-                : searchInputValue
-                  ? 'No se encontraron resultados'
-                  : `No hay ${modoInactivos ? 'medicamentos inactivos' : 'medicamentos'} para mostrar`}
+              {searchInputValue
+                ? 'No se encontraron resultados'
+                : `No hay ${modoInactivos ? 'medicamentos inactivos' : 'medicamentos'} para mostrar`}
             </Text>
           </View>
         ) : (
