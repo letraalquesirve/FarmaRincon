@@ -1,14 +1,17 @@
 name: EAS Build (Android)
 
-# Dispara un build en la nube de EAS (Expo) cuando se sube algo a
-# sqlite-local, o manualmente desde la pestaña "Actions" de GitHub
-# ("Run workflow"). El build en sí corre en los servidores de Expo,
-# no en este runner de GitHub — este workflow solo lo pide y espera
-# el resultado.
+# Dispara un build en la nube de EAS (Expo) SOLO manualmente, desde la
+# pestaña "Actions" de GitHub ("Run workflow"). El build en sí corre en
+# los servidores de Expo, no en este runner de GitHub — este workflow
+# solo lo pide y espera el resultado.
+#
+# A propósito NO se dispara en cada push: la cuenta free de EAS tiene
+# cuota mensual limitada de builds Android, y la mayoría de los cambios
+# de este proyecto son JS puro (se prueban con hot-reload vía
+# `expo start --dev-client`, sin gastar build). Lanza uno manual solo
+# cuando de verdad haga falta un APK nuevo (ej. se agregó una
+# dependencia nativa).
 on:
-  push:
-    branches:
-      - sqlite-local
   workflow_dispatch:
     inputs:
       profile:
