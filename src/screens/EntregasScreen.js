@@ -305,10 +305,8 @@ export default function EntregasScreen({ user }) {
         }
       }
 
-      Alert.alert('Éxito', 'Entrega registrada correctamente', [
-        { text: 'OK', onPress: resetForm },
-      ]);
-      await loadData();
+      resetForm();
+      Alert.alert('Éxito', 'Entrega registrada correctamente');
     } catch (error) {
       console.error('Error:', error);
       Alert.alert('Error', error.message || 'No se pudo crear la entrega');
@@ -369,10 +367,8 @@ export default function EntregasScreen({ user }) {
         await medicamentoUpdate(med.medicamentoId, { cantidad: nuevaCantidad });
       }
 
-      Alert.alert('Éxito', 'Medicamentos agregados a la entrega existente', [
-        { text: 'OK', onPress: resetForm },
-      ]);
-      await loadData();
+      resetForm();
+      Alert.alert('Éxito', 'Medicamentos agregados a la entrega existente');
     } catch (error) {
       console.error('Error:', error);
       Alert.alert('Error', error.message || 'No se pudo agregar a la entrega');

@@ -642,7 +642,7 @@ export default function PedidosScreen({ user }) {
       >
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
           >
             <ScrollView
