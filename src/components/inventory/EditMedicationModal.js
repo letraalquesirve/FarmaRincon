@@ -18,6 +18,7 @@ import { LoadingButton } from '../common/LoadingButton';
 import DatePickerInput from '../DatePickerInput';
 import CategoriaPicker from '../CategoriaPicker';
 import { formatDate } from '../../utils/dateUtils';
+import { buscarCategoriaPorNombreParecido } from '../../utils/categoriaSimilar';
 
 export const EditMedicationModal = ({
   visible,
@@ -112,6 +113,22 @@ export const EditMedicationModal = ({
     setForm({ ...form, imagen: null });
   };
 
+  // Al salir del campo "nombre" (por ejemplo si se corrige el nombre al
+  // editar), sugerir categoría+ubicación por nombre parecido - solo si la
+  // categoría sigue vacía, sin interrumpir con ninguna alerta.
+  const sugerirCategoriaAlSalirDelNombre = async () => {
+    const nombreActual = form.nombre?.trim();
+    if (!nombreActual || form.categoria) return;
+
+    const parecido = await buscarCategoriaPorNombreParecido(nombreActual);
+    if (!parecido) return;
+
+    const ubicacion = await obtenerUbicacionDesdeCategoria(parecido.categoria);
+    setForm((prev) =>
+      prev.categoria ? prev : { ...prev, categoria: parecido.categoria, ubicacion: ubicacion || prev.ubicacion }
+    );
+  };
+
   return (
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
@@ -133,6 +150,7 @@ export const EditMedicationModal = ({
                 style={styles.input}
                 value={form.nombre}
                 onChangeText={(t) => setForm({ ...form, nombre: t })}
+                onBlur={sugerirCategoriaAlSalirDelNombre}
                 placeholder="Nombre del medicamento"
               />
 

@@ -46,6 +46,7 @@ import {
   historyCreate,
   categoriaGetByNombre,
 } from '../services/LocalDataService';
+import { buscarCategoriaPorNombreParecido } from '../utils/categoriaSimilar';
 
 export default function RegisterScreen({ user }) {
   // ==================== ESTADOS PRINCIPALES ====================
@@ -850,6 +851,30 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
     }
   };
 
+  // Al salir del campo "nombre" sin haber usado ningún botón de IA (formulario
+  // 100% manual), intentar sugerir categoría+ubicación por nombre parecido.
+  // Silencioso: solo actúa si la categoría sigue vacía, y no interrumpe con
+  // ninguna alerta - la persona simplemente ve el campo ya lleno.
+  const sugerirCategoriaAlSalirDelNombre = async (esManual) => {
+    const nombreActual = (esManual ? manualFormData.nombre : formData.nombre)?.trim();
+    const categoriaActual = esManual ? manualFormData.categoria : formData.categoria;
+    if (!nombreActual || categoriaActual) return;
+
+    const parecido = await buscarCategoriaPorNombreParecido(nombreActual);
+    if (!parecido) return;
+
+    const ubicacion = await obtenerUbicacionDesdeCategoria(parecido.categoria);
+    if (esManual) {
+      setManualFormData((prev) =>
+        prev.categoria ? prev : { ...prev, categoria: parecido.categoria, ubicacion: ubicacion || prev.ubicacion }
+      );
+    } else {
+      setFormData((prev) =>
+        prev.categoria ? prev : { ...prev, categoria: parecido.categoria, ubicacion: ubicacion || prev.ubicacion }
+      );
+    }
+  };
+
   const consultarCategoriaPorTexto = async (nombreMedicamento, esManual = false, intento = 1) => {
     if (!nombreMedicamento?.trim()) {
       Alert.alert('Error', 'Primero ingresa el nombre del medicamento');
@@ -910,7 +935,26 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
         await new Promise((r) => setTimeout(r, espera));
         return consultarCategoriaPorTexto(nombreMedicamento, esManual, intento + 1);
       }
-      Alert.alert('Error', 'No se pudo obtener la categoría. Selecciona manualmente.');
+      // Sin red (o la IA falló del todo): buscar un medicamento parecido ya
+      // registrado y copiar su categoría, en vez de dejar al usuario sin nada.
+      const parecido = await buscarCategoriaPorNombreParecido(nombreMedicamento);
+      if (parecido) {
+        if (esManual) {
+          setManualFormData((prev) => ({ ...prev, categoria: parecido.categoria }));
+          const ubicacion = await obtenerUbicacionDesdeCategoria(parecido.categoria);
+          if (ubicacion) setManualFormData((prev) => ({ ...prev, ubicacion }));
+        } else {
+          setFormData((prev) => ({ ...prev, categoria: parecido.categoria }));
+          const ubicacion = await obtenerUbicacionDesdeCategoria(parecido.categoria);
+          if (ubicacion) setFormData((prev) => ({ ...prev, ubicacion }));
+        }
+        Alert.alert(
+          'Sin conexión — categoría por parecido',
+          `No se pudo consultar la IA. Se usó la categoría de "${parecido.nombreParecido}" (nombre parecido) → "${parecido.categoria}". Revisa que sea correcta.`
+        );
+      } else {
+        Alert.alert('Error', 'No se pudo obtener la categoría. Selecciona manualmente.');
+      }
     } finally {
       setConsultandoCategoria(false);
     }
@@ -976,6 +1020,7 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
                   style={styles.input}
                   value={formData.nombre}
                   onChangeText={(t) => setFormData({ ...formData, nombre: t })}
+                  onBlur={() => sugerirCategoriaAlSalirDelNombre(false)}
                   placeholder="Ej: Paracetamol"
                 />
               </View>
@@ -1236,6 +1281,7 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
                       style={styles.input}
                       value={manualFormData.nombre}
                       onChangeText={(t) => setManualFormData({ ...manualFormData, nombre: t })}
+                      onBlur={() => sugerirCategoriaAlSalirDelNombre(true)}
                       placeholder="Ej: Paracetamol"
                     />
                   </View>
