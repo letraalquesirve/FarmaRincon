@@ -49,6 +49,7 @@ import {
 import { useRoute, useFocusEffect } from '@react-navigation/native';
 
 export default function PedidosScreen({ user }) {
+  const isUserAdmin = user?.tipo === 'admin';
   const [pedidos, setPedidos] = useState([]);
   const [entregas, setEntregas] = useState([]);
   const [medicamentos, setMedicamentos] = useState([]);
@@ -278,7 +279,10 @@ export default function PedidosScreen({ user }) {
   };
 
   const eliminarPedido = (pedidoId, nombreSolicitante) => {
-    Alert.alert('Eliminar Pedido', `¿Estás seguro de eliminar el pedido de ${nombreSolicitante}?`, [
+    Alert.alert(
+      'Eliminar pedido definitivamente',
+      `¿Estás seguro de eliminar PERMANENTEMENTE el pedido de ${nombreSolicitante}? Esta acción no se puede deshacer.`,
+      [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
@@ -531,7 +535,7 @@ export default function PedidosScreen({ user }) {
                   </View>
                 </View>
                 <View style={styles.pedidoHeaderRight}>
-                  {!pedido.atendido && (
+                  {isUserAdmin && (
                     <TouchableOpacity
                       onPress={() => eliminarPedido(pedido.id, pedido.nombreSolicitante)}
                     >

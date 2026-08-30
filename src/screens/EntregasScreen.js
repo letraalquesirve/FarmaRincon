@@ -35,12 +35,14 @@ import {
   entregaGetOne,
   entregaCreate,
   entregaUpdate,
+  entregaDelete,
   medicamentosList,
   medicamentoUpdate,
   historyCreate,
 } from '../services/LocalDataService';
 
 export default function EntregasScreen({ user }) {
+  const isUserAdmin = user?.tipo === 'admin';
   const [entregas, setEntregas] = useState([]);
   const [medicamentos, setMedicamentos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -197,6 +199,31 @@ export default function EntregasScreen({ user }) {
 
   const eliminarMedicamento = (id) => {
     setMedicamentosSeleccionados(medicamentosSeleccionados.filter((m) => m.id !== id));
+  };
+
+  // Eliminar una entrega ya registrada, definitivamente (solo admin)
+  const eliminarEntrega = (entregaId, destinoEntrega) => {
+    Alert.alert(
+      'Eliminar entrega definitivamente',
+      `¿Estás seguro de eliminar PERMANENTEMENTE la entrega a ${destinoEntrega}? Esta acción no se puede deshacer.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await entregaDelete(entregaId);
+              Alert.alert('Éxito', 'Entrega eliminada correctamente');
+              await loadData();
+            } catch (error) {
+              console.error('Error eliminando entrega:', error);
+              Alert.alert('Error', 'No se pudo eliminar la entrega');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const verificarEntregaExistente = async () => {
@@ -528,11 +555,18 @@ export default function EntregasScreen({ user }) {
                       </Text>
                     </View>
                   </View>
-                  {expandedId === entrega.id ? (
-                    <ChevronUp size={20} color="#6B7280" />
-                  ) : (
-                    <ChevronDown size={20} color="#6B7280" />
-                  )}
+                  <View style={styles.entregaHeaderRight}>
+                    {isUserAdmin && (
+                      <TouchableOpacity onPress={() => eliminarEntrega(entrega.id, entrega.destino)}>
+                        <Trash2 color="#DC2626" size={20} />
+                      </TouchableOpacity>
+                    )}
+                    {expandedId === entrega.id ? (
+                      <ChevronUp size={20} color="#6B7280" />
+                    ) : (
+                      <ChevronDown size={20} color="#6B7280" />
+                    )}
+                  </View>
                 </TouchableOpacity>
                 {expandedId === entrega.id && (
                   <View style={styles.entregaDetails}>
@@ -868,6 +902,7 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   entregaHeaderLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  entregaHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
   abiertaDot: { backgroundColor: '#F59E0B' },
   cerradaDot: { backgroundColor: '#10B981' },
