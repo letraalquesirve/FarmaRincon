@@ -278,21 +278,32 @@ export default function PedidosScreen({ user }) {
     }
   };
 
-  const eliminarPedido = (pedidoId, nombreSolicitante) => {
-    Alert.alert(
-      'Eliminar pedido definitivamente',
-      `¿Estás seguro de eliminar PERMANENTEMENTE el pedido de ${nombreSolicitante}? Esta acción no se puede deshacer.`,
-      [
+  const eliminarPedido = async (pedidoId, nombreSolicitante) => {
+    // Ver si hay entregas vinculadas a este pedido, para avisar antes de borrar
+    const todasEntregas = await entregasList();
+    const entregasVinculadas = todasEntregas.filter((e) => e.pedidoId === pedidoId);
+
+    const mensaje =
+      entregasVinculadas.length > 0
+        ? `¿Estás seguro de eliminar PERMANENTEMENTE el pedido de ${nombreSolicitante}? Esta acción no se puede deshacer.\n\nTiene ${entregasVinculadas.length} entrega(s) vinculada(s) - NO se borrarán, solo quedarán desvinculadas (como entregas sueltas).`
+        : `¿Estás seguro de eliminar PERMANENTEMENTE el pedido de ${nombreSolicitante}? Esta acción no se puede deshacer.`;
+
+    Alert.alert('Eliminar pedido definitivamente', mensaje, [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
         onPress: async () => {
           try {
+            // Desvincular (no borrar) las entregas que apuntaban a este pedido
+            for (const entrega of entregasVinculadas) {
+              await entregaUpdate(entrega.id, { pedidoId: null });
+            }
             await pedidoDelete(pedidoId);
             Alert.alert('Éxito', 'Pedido eliminado correctamente');
             await loadData();
           } catch (error) {
+            console.error('Error eliminando pedido:', error);
             Alert.alert('Error', 'No se pudo eliminar el pedido');
           }
         },

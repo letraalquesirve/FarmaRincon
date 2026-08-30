@@ -39,6 +39,8 @@ import {
   medicamentosList,
   medicamentoUpdate,
   historyCreate,
+  pedidoGetOne,
+  pedidoUpdate,
 } from '../services/LocalDataService';
 
 export default function EntregasScreen({ user }) {
@@ -202,28 +204,44 @@ export default function EntregasScreen({ user }) {
   };
 
   // Eliminar una entrega ya registrada, definitivamente (solo admin)
-  const eliminarEntrega = (entregaId, destinoEntrega) => {
-    Alert.alert(
-      'Eliminar entrega definitivamente',
-      `¿Estás seguro de eliminar PERMANENTEMENTE la entrega a ${destinoEntrega}? Esta acción no se puede deshacer.`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await entregaDelete(entregaId);
-              Alert.alert('Éxito', 'Entrega eliminada correctamente');
-              await loadData();
-            } catch (error) {
-              console.error('Error eliminando entrega:', error);
-              Alert.alert('Error', 'No se pudo eliminar la entrega');
+  const eliminarEntrega = (entrega) => {
+    const estaVinculada = !!entrega.pedidoId;
+    const mensaje = estaVinculada
+      ? `¿Estás seguro de eliminar PERMANENTEMENTE la entrega a ${entrega.destino}? Esta acción no se puede deshacer.\n\nEstá vinculada a un pedido - se quitará de su lista de entregas, y si esta era la única, el pedido volverá a quedar pendiente.`
+      : `¿Estás seguro de eliminar PERMANENTEMENTE la entrega a ${entrega.destino}? Esta acción no se puede deshacer.`;
+
+    Alert.alert('Eliminar entrega definitivamente', mensaje, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            // Si estaba vinculada a un pedido, quitarla de su lista de
+            // entregas realizadas y, si era la única, volver a pendiente
+            if (entrega.pedidoId) {
+              const pedido = await pedidoGetOne(entrega.pedidoId);
+              if (pedido) {
+                const entregasRestantes = (pedido.entregasRealizadas || []).filter(
+                  (e) => e.entregaId !== entrega.id
+                );
+                await pedidoUpdate(pedido.id, {
+                  entregasRealizadas: entregasRestantes,
+                  atendido: entregasRestantes.length > 0,
+                });
+              }
             }
-          },
+
+            await entregaDelete(entrega.id);
+            Alert.alert('Éxito', 'Entrega eliminada correctamente');
+            await loadData();
+          } catch (error) {
+            console.error('Error eliminando entrega:', error);
+            Alert.alert('Error', 'No se pudo eliminar la entrega');
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   const verificarEntregaExistente = async () => {
@@ -557,7 +575,7 @@ export default function EntregasScreen({ user }) {
                   </View>
                   <View style={styles.entregaHeaderRight}>
                     {isUserAdmin && (
-                      <TouchableOpacity onPress={() => eliminarEntrega(entrega.id, entrega.destino)}>
+                      <TouchableOpacity onPress={() => eliminarEntrega(entrega)}>
                         <Trash2 color="#DC2626" size={20} />
                       </TouchableOpacity>
                     )}
