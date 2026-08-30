@@ -36,6 +36,7 @@ import {
   medicamentoGetOne,
   medicamentoUpdate,
   medicamentoCreate,
+  medicamentoDelete,
   historyCreate,
   categoriaGetByNombre,
 } from '../services/LocalDataService';
@@ -432,6 +433,43 @@ export default function InventoryScreen({ user }) {
     ]);
   };
 
+  // Eliminar un medicamento inactivo PERMANENTEMENTE (a diferencia de
+  // Desactivar, esto no se puede deshacer - borra el registro por completo)
+  const handleEliminarDefinitivo = async (medId, medName) => {
+    Alert.alert(
+      'Eliminar definitivamente',
+      `¿Estás seguro de eliminar PERMANENTEMENTE "${medName}"? Esta acción NO se puede deshacer.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await registrarHistory(
+                medId,
+                new Date().toISOString(),
+                getUserName(),
+                'Eliminado permanentemente',
+                0,
+                medName
+              );
+              await medicamentoDelete(medId);
+              if (haBuscado) {
+                await ejecutarBusqueda(searchInputValue, filter);
+              }
+              setDetailModalVisible(false);
+              Alert.alert('Éxito', 'Medicamento eliminado permanentemente');
+            } catch (error) {
+              console.error('Error eliminando definitivamente:', error);
+              Alert.alert('Error', 'No se pudo eliminar el medicamento');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleEditSave = async (form) => {
     const cantidadAnterior = selectedMed.cantidad;
     const nuevaCantidad = parseInt(form.cantidad);
@@ -825,15 +863,24 @@ export default function InventoryScreen({ user }) {
                   </>
                 )}
                 {modoInactivos && selectedMed?.activo === false && (
-                  <TouchableOpacity
-                    style={styles.reactivarDetailButton}
-                    onPress={() => {
-                      setDetailModalVisible(false);
-                      setReactivarModalVisible(true);
-                    }}
-                  >
-                    <Text style={styles.reactivarDetailButtonText}>Reactivar</Text>
-                  </TouchableOpacity>
+                  <>
+                    <TouchableOpacity
+                      style={styles.reactivarDetailButton}
+                      onPress={() => {
+                        setDetailModalVisible(false);
+                        setReactivarModalVisible(true);
+                      }}
+                    >
+                      <Text style={styles.reactivarDetailButtonText}>Reactivar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.deleteDetailButton}
+                      onPress={() => handleEliminarDefinitivo(selectedMed.id, selectedMed.nombre)}
+                    >
+                      <Trash color="#DC2626" size={16} />
+                      <Text style={styles.deleteDetailButtonText}>Eliminar definitivamente</Text>
+                    </TouchableOpacity>
+                  </>
                 )}
               </View>
             </ScrollView>
