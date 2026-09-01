@@ -168,8 +168,11 @@ export default function InventoryScreen({ user }) {
           });
         }
 
-        // Orden alfabético, igual que antes (sort: 'nombre')
-        items = [...items].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+        // Orden por fecha de creación (fechaRegistro), descendente:
+        // los últimos medicamentos entrados a la BD arriba
+        items = [...items].sort(
+          (a, b) => new Date(b.fechaRegistro || 0) - new Date(a.fechaRegistro || 0)
+        );
 
         console.log('🔍 Modo:', modoInactivos ? 'INACTIVOS' : 'ACTIVOS');
         console.log('🔍 Término original:', termino);
