@@ -26,6 +26,7 @@ import {
   Upload,
   Download,
   Tag,
+  Bell,
   Share2,
   FolderOpen,
   Users,
@@ -41,6 +42,7 @@ import {
 } from '../services/SQLiteService';
 import { medicamentosList, pedidosList, entregasList } from '../services/LocalDataService';
 import CategoriasAdminModal from '../components/CategoriasAdminModal';
+import { forzarChequeoDiario } from '../services/AdminNotificationService';
 import UsuariosScreen from './UsuariosScreen';
 
 export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
@@ -80,6 +82,26 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   // Cargar BD desde el servidor
   // Muestra sobre qué backup está trabajando este celular (para orientar
   // a quien usa la app sobre qué tan reciente es la información que ve)
+  // Fuerza el chequeo diario de vencimientos/seguimiento ahora mismo, sin
+  // esperar al día siguiente (solo admin) - útil para pruebas y para
+  // forzar un aviso manual si hace falta.
+  const handleForzarChequeoDiario = async () => {
+    Alert.alert(
+      'Forzar chequeo de notificaciones',
+      '¿Revisar ahora vencimientos y seguimiento de entregas, y avisar a los admins si hay algo?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Revisar ahora',
+          onPress: async () => {
+            await forzarChequeoDiario();
+            Alert.alert('Listo', 'Chequeo realizado. Si había algo que avisar, ya se envió.');
+          },
+        },
+      ]
+    );
+  };
+
   const handleShowBackupInfo = async () => {
     const info = await getUltimoBackupInfo();
     if (!info) {
@@ -498,6 +520,11 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
               onPress={() => setShowCategoriasModal(true)}
             >
               <Tag color="white" size={20} />
+            </TouchableOpacity>
+          )}
+          {isUserAdmin && (
+            <TouchableOpacity style={styles.apiKeyButton} onPress={handleForzarChequeoDiario}>
+              <Bell color="white" size={20} />
             </TouchableOpacity>
           )}
           <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>

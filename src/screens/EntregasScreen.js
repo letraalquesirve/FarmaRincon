@@ -31,6 +31,7 @@ import {
 } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { sendLocalNotification } from '../services/NotificationService';
+import { notificarSeguimientoEntrega } from '../services/AdminNotificationService';
 import {
   entregasList,
   entregaGetOne,
@@ -204,11 +205,18 @@ export default function EntregasScreen({ user }) {
     setMedicamentosSeleccionados(medicamentosSeleccionados.filter((m) => m.id !== id));
   };
 
-  // Prender/apagar el seguimiento diario de esta entrega (solo admin)
+  // Prender/apagar el seguimiento diario de esta entrega (solo admin).
+  // Al ACTIVARLO, manda el aviso de inmediato (no espera al chequeo del
+  // día siguiente) - útil si se reactiva por un problema nuevo del
+  // mensajero. Al desactivarlo, no manda nada.
   const toggleSeguimiento = async (entrega) => {
     try {
-      await entregaUpdate(entrega.id, { darSeguimiento: !entrega.darSeguimiento });
+      const nuevoValor = !entrega.darSeguimiento;
+      await entregaUpdate(entrega.id, { darSeguimiento: nuevoValor });
       await loadData();
+      if (nuevoValor) {
+        notificarSeguimientoEntrega({ ...entrega, darSeguimiento: true });
+      }
     } catch (error) {
       console.error('Error actualizando seguimiento:', error);
       Alert.alert('Error', 'No se pudo actualizar el seguimiento');

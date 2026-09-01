@@ -151,6 +151,23 @@ const marcarChequeadoHoy = async () => {
   await AsyncStorage.setItem(CLAVE_ULTIMO_CHEQUEO_DIARIO, hoy);
 };
 
+// Aviso de seguimiento de UNA entrega puntual - reutilizado tanto por el
+// chequeo diario en lote como por el aviso inmediato al activar el switch.
+export const notificarSeguimientoEntrega = async (entrega) => {
+  try {
+    const tokens = await obtenerTokensAdmins();
+    if (tokens.length === 0) return;
+
+    const body = `Entrega Medicinas a ${entrega.destino} recordar ${entrega.notas || ''}`;
+    await enviarATokens(tokens, 'Seguimiento de entrega', body, {
+      tipo: 'seguimiento',
+      entregaId: entrega.id,
+    });
+  } catch (error) {
+    console.error('Error notificando seguimiento de entrega:', error);
+  }
+};
+
 export const ejecutarChequeoDiario = async () => {
   try {
     if (await yaSeChecoHoy()) return;
@@ -181,13 +198,18 @@ export const ejecutarChequeoDiario = async () => {
     const conSeguimiento = todasEntregas.filter((e) => e.darSeguimiento);
 
     for (const entrega of conSeguimiento) {
-      const body = `Entrega Medicinas a ${entrega.destino} recordar ${entrega.notas || ''}`;
-      await enviarATokens(tokens, 'Seguimiento de entrega', body, {
-        tipo: 'seguimiento',
-        entregaId: entrega.id,
-      });
+      await notificarSeguimientoEntrega(entrega);
     }
   } catch (error) {
     console.error('Error en chequeo diario de notificaciones:', error);
   }
+};
+
+// Fuerza el chequeo diario ahora mismo, sin esperar al próximo día -
+// limpia la marca de "ya se chequeó hoy" y vuelve a correrlo. Útil para
+// pruebas, y también para uso real si un admin quiere forzar un chequeo
+// sin esperar.
+export const forzarChequeoDiario = async () => {
+  await AsyncStorage.removeItem(CLAVE_ULTIMO_CHEQUEO_DIARIO);
+  await ejecutarChequeoDiario();
 };
