@@ -506,18 +506,37 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
     }
   };
 
-  const pickManualImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.8,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0].uri) {
-      setManualImageUri(result.assets[0].uri);
-      const base64Comprimido = await comprimirImagenParaStorage(result.assets[0].uri);
-      manualImageBase64Ref.current = base64Comprimido;
-      setManualImageBase64(base64Comprimido);
+  const tomarFotoManual = async (tipo) => {
+    try {
+      let result;
+      if (tipo === 'camera') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Permiso denegado', 'Se necesita acceso a la cámara');
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          allowsEditing: true,
+          quality: 0.8,
+          base64: true,
+        });
+      } else {
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          quality: 0.8,
+          base64: true,
+        });
+      }
+      if (!result.canceled && result.assets[0].uri) {
+        setManualImageUri(result.assets[0].uri);
+        const base64Comprimido = await comprimirImagenParaStorage(result.assets[0].uri);
+        manualImageBase64Ref.current = base64Comprimido;
+        setManualImageBase64(base64Comprimido);
+      }
+    } catch (error) {
+      console.error('Error tomando foto manual:', error);
+      Alert.alert('Error', 'No se pudo obtener la imagen');
     }
   };
 
@@ -1345,10 +1364,22 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
                 />
 
                 <Text style={styles.label}>Foto (opcional)</Text>
-                <TouchableOpacity style={styles.imagePickerButton} onPress={pickManualImage}>
-                  <ImageIcon size={24} color="#7C3AED" />
-                  <Text style={styles.imagePickerText}>Seleccionar foto</Text>
-                </TouchableOpacity>
+                <View style={styles.manualMediaButtonsRow}>
+                  <TouchableOpacity
+                    style={styles.imagePickerButton}
+                    onPress={() => tomarFotoManual('camera')}
+                  >
+                    <CameraIcon size={20} color="#7C3AED" />
+                    <Text style={styles.imagePickerText}>Cámara</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.imagePickerButton}
+                    onPress={() => tomarFotoManual('gallery')}
+                  >
+                    <ImageIcon size={20} color="#7C3AED" />
+                    <Text style={styles.imagePickerText}>Galería</Text>
+                  </TouchableOpacity>
+                </View>
                 {manualImageUri && (
                   <View style={styles.manualPreviewContainer}>
                     <Image source={{ uri: manualImageUri }} style={styles.manualPreviewImage} />
@@ -1597,7 +1628,13 @@ const styles = StyleSheet.create({
   ultimoStatus: { alignItems: 'flex-end', marginTop: 4 },
   ultimoBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   ultimoStatusText: { fontSize: 11, fontWeight: 'bold' },
+  manualMediaButtonsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
   imagePickerButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1607,7 +1644,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 12,
     gap: 8,
-    marginBottom: 16,
   },
   imagePickerText: { color: '#7C3AED', fontWeight: '500', fontSize: 14 },
   manualPreviewContainer: { position: 'relative', marginBottom: 16, alignItems: 'center' },
