@@ -37,6 +37,7 @@ import {
   Square,
 } from 'lucide-react-native';
 import { sendLocalNotification } from '../services/NotificationService';
+import { notificarNuevoPedido } from '../services/AdminNotificationService';
 import {
   pedidosList,
   pedidoCreate,
@@ -255,11 +256,12 @@ export default function PedidosScreen({ user }) {
     };
 
     try {
-      await pedidoCreate(pedidoData);
+      const pedidoCreado = await pedidoCreate(pedidoData);
       await sendLocalNotification(
         '📋 Nuevo Pedido',
         `${formData.nombreSolicitante} ha solicitado ${formData.medicamentosSolicitados.length} medicamento(s)`
       );
+      notificarNuevoPedido(pedidoCreado); // aviso push a admins, sin bloquear el flujo si falla
       setFormData({
         nombreSolicitante: '',
         lugarResidencia: '',

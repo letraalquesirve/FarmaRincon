@@ -69,6 +69,7 @@ export const initDatabase = async () => {
       creadoPor TEXT,
       pedidoId TEXT,
       notas TEXT,
+      darSeguimiento INTEGER DEFAULT 0,
       ultimaModificacion TEXT,
       updated TEXT,
       _syncStatus TEXT DEFAULT 'synced',
@@ -80,6 +81,7 @@ export const initDatabase = async () => {
       id TEXT PRIMARY KEY,
       nombre TEXT NOT NULL,
       tipo TEXT DEFAULT 'user',
+      pushToken TEXT,
       updated TEXT,
       _syncStatus TEXT DEFAULT 'synced',
       _pendingOp TEXT
@@ -119,8 +121,41 @@ export const initDatabase = async () => {
     CREATE INDEX IF NOT EXISTS idx_categorias_nombre ON categorias(nombre);
   `);
 
+  // Migración real: agrega columnas que falten en bases de datos que ya
+  // existían en el celular ANTES de que estas columnas se agregaran al
+  // esquema (CREATE TABLE IF NOT EXISTS no hace nada si la tabla ya existe,
+  // así que sin esto una BD vieja se queda atascada sin las columnas
+  // nuevas y truena al intentar usarlas).
+  await ejecutarMigraciones(db);
+
   console.log('✅ Base de datos SQLite inicializada');
   return db;
+};
+
+const ensureColumn = async (dbInstance, tabla, columna, definicionSQL) => {
+  try {
+    const cols = await dbInstance.getAllAsync(`PRAGMA table_info(${tabla})`);
+    const existe = cols.some((c) => c.name === columna);
+    if (!existe) {
+      await dbInstance.execAsync(`ALTER TABLE ${tabla} ADD COLUMN ${columna} ${definicionSQL}`);
+      console.log(`🔧 Migración: agregada columna "${columna}" a "${tabla}"`);
+    }
+  } catch (error) {
+    console.error(`❌ Error migrando columna ${columna} en ${tabla}:`, error);
+  }
+};
+
+const ejecutarMigraciones = async (dbInstance) => {
+  // medicamentos: columnas agregadas después de la creación original de la tabla
+  await ensureColumn(dbInstance, 'medicamentos', 'audio', 'TEXT');
+  await ensureColumn(dbInstance, 'medicamentos', 'fechaEdicion', 'TEXT');
+  await ensureColumn(dbInstance, 'medicamentos', 'editadoPor', 'TEXT');
+  await ensureColumn(dbInstance, 'medicamentos', 'fechaReactivacion', 'TEXT');
+  await ensureColumn(dbInstance, 'medicamentos', 'reactivadoPor', 'TEXT');
+  // usuarios: token de push (notificaciones)
+  await ensureColumn(dbInstance, 'usuarios', 'pushToken', 'TEXT');
+  // entregas: seguimiento diario de mensajero
+  await ensureColumn(dbInstance, 'entregas', 'darSeguimiento', 'INTEGER DEFAULT 0');
 };
 
 export const getDb = async () => {
@@ -419,12 +454,19 @@ export const getAllEntregas = async () => {
   return result.map((e) => ({
     ...e,
     items: e.items ? JSON.parse(e.items) : [],
+    darSeguimiento: e.darSeguimiento === 1 || e.darSeguimiento === true,
   }));
 };
 
 export const getEntregaById = async (id) => {
   const dbInstance = await getDb();
-  return await dbInstance.getFirstAsync('SELECT * FROM entregas WHERE id = ?', [id]);
+  const row = await dbInstance.getFirstAsync('SELECT * FROM entregas WHERE id = ?', [id]);
+  if (!row) return row;
+  return {
+    ...row,
+    items: row.items ? JSON.parse(row.items) : [],
+    darSeguimiento: row.darSeguimiento === 1 || row.darSeguimiento === true,
+  };
 };
 
 export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = null) => {
@@ -437,7 +479,8 @@ export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = nu
     await dbInstance.runAsync(
       `UPDATE entregas SET 
         destino = ?, fechaCreacion = ?, estado = ?, items = ?,
-        creadoPor = ?, pedidoId = ?, notas = ?, ultimaModificacion = ?,
+        creadoPor = ?, pedidoId = ?, notas = ?, darSeguimiento = ?,
+        ultimaModificacion = ?,
         updated = ?, _syncStatus = ?, _pendingOp = ?
       WHERE id = ?`,
       [
@@ -448,6 +491,7 @@ export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = nu
         entrega.creadoPor || '',
         entrega.pedidoId || null,
         entrega.notas || '',
+        entrega.darSeguimiento ? 1 : 0,
         entrega.ultimaModificacion || now,
         now,
         syncStatus,
@@ -459,8 +503,8 @@ export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = nu
     await dbInstance.runAsync(
       `INSERT INTO entregas (
         id, destino, fechaCreacion, estado, items, creadoPor, pedidoId,
-        notas, ultimaModificacion, updated, _syncStatus, _pendingOp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        notas, darSeguimiento, ultimaModificacion, updated, _syncStatus, _pendingOp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         entrega.id,
         entrega.destino,
@@ -470,6 +514,7 @@ export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = nu
         entrega.creadoPor || '',
         entrega.pedidoId || null,
         entrega.notas || '',
+        entrega.darSeguimiento ? 1 : 0,
         entrega.ultimaModificacion || now,
         now,
         syncStatus,

@@ -120,8 +120,11 @@ export const setupNotificationChannel = async () => {
   }
 };
 
-// Registrar el dispositivo para recibir push notifications
-export const registerForPushNotifications = async (userId, pb) => {
+// Registra este dispositivo para recibir push notifications y devuelve el
+// token de Expo. El guardado del token (en la tabla local de usuarios) lo
+// hace quien llama a esta función - este servicio ya no depende de
+// PocketBase para nada.
+export const registerForPushNotifications = async () => {
   try {
     // 1. Verificar permisos
     const hasPermission = await requestPermissions();
@@ -146,35 +149,6 @@ export const registerForPushNotifications = async (userId, pb) => {
 
     const token = tokenData.data;
     console.log('📱 Expo Push Token:', token);
-
-    // 5. Guardar token en PocketBase
-    if (pb && userId) {
-      // Verificar si ya existe un token para este dispositivo
-      const existingTokens = await pb.collection('push_tokens').getList(1, 1, {
-        filter: `token = "${token}"`,
-      });
-
-      if (existingTokens.items.length === 0) {
-        await pb.collection('push_tokens').create({
-          user_id: userId,
-          token: token,
-          platform: Platform.OS,
-          active: true,
-        });
-        console.log('✅ Token guardado en PocketBase');
-      } else {
-        // Actualizar si es necesario
-        if (!existingTokens.items[0].active) {
-          await pb.collection('push_tokens').update(existingTokens.items[0].id, {
-            active: true,
-          });
-          console.log('✅ Token reactivado');
-        } else {
-          console.log('ℹ️ Token ya existente en PocketBase');
-        }
-      }
-    }
-
     return token;
   } catch (error) {
     console.error('❌ Error registrando push notifications:', error);

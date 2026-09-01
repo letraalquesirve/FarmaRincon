@@ -1,6 +1,6 @@
 // App.js
 import React, { useState, useEffect } from 'react';
-import { LogBox, View, ActivityIndicator, Alert } from 'react-native';
+import { LogBox, View, ActivityIndicator, Alert, AppState } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Home, Package, PlusCircle, History, ClipboardList, MinusCircle } from 'lucide-react-native';
@@ -11,6 +11,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // BD local (ya no dependemos de PocketBase en vivo para leer/escribir)
 import { initDatabase } from './src/services/SQLiteService';
 import { usuarioGetByNombre } from './src/services/LocalDataService';
+import {
+  registrarPushTokenUsuarioActual,
+  procesarColaPendiente,
+  ejecutarChequeoDiario,
+} from './src/services/AdminNotificationService';
 
 // Importar screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -21,9 +26,6 @@ import PedidosScreen from './src/screens/PedidosScreen';
 import EntregasScreen from './src/screens/EntregasScreen';
 import ApiKeyModal from './src/components/ApiKeyModal';
 import LoginModal from './src/components/LoginModal';
-
-// ❌ NOTIFICACIONES PUSH COMENTADAS (offline-first)
-// import { registerForPushNotifications } from './src/services/NotificationService';
 
 LogBox.ignoreLogs(['Setting a timer for a long period of time']);
 
@@ -160,6 +162,30 @@ export default function App() {
       isMounted = false;
     };
   }, []);
+
+  // ── Notificaciones: registrar token, vaciar cola pendiente, chequeo
+  // diario de vencimientos/seguimiento - se dispara cada vez que hay
+  // sesión activa (login fresco o restaurada), y también cada vez que
+  // la app vuelve a primer plano (para reintentar la cola sin red).
+  useEffect(() => {
+    if (!isLoggedIn || !user) return;
+
+    const correrNotificaciones = async () => {
+      await registrarPushTokenUsuarioActual(user);
+      await procesarColaPendiente();
+      await ejecutarChequeoDiario();
+    };
+
+    correrNotificaciones();
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        procesarColaPendiente();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [isLoggedIn, user]);
 
   const checkApiKey = async () => {
     try {

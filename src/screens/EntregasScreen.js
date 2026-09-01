@@ -12,6 +12,7 @@ import {
   TextInput,
   FlatList,
   RefreshControl,
+  Switch,
 } from 'react-native';
 import {
   MinusCircle,
@@ -201,6 +202,17 @@ export default function EntregasScreen({ user }) {
 
   const eliminarMedicamento = (id) => {
     setMedicamentosSeleccionados(medicamentosSeleccionados.filter((m) => m.id !== id));
+  };
+
+  // Prender/apagar el seguimiento diario de esta entrega (solo admin)
+  const toggleSeguimiento = async (entrega) => {
+    try {
+      await entregaUpdate(entrega.id, { darSeguimiento: !entrega.darSeguimiento });
+      await loadData();
+    } catch (error) {
+      console.error('Error actualizando seguimiento:', error);
+      Alert.alert('Error', 'No se pudo actualizar el seguimiento');
+    }
   };
 
   // Eliminar una entrega ya registrada, definitivamente (solo admin)
@@ -623,6 +635,22 @@ export default function EntregasScreen({ user }) {
                         </Text>
                       </View>
                     )}
+                    {isUserAdmin && (
+                      <View style={styles.seguimientoRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.seguimientoLabel}>Dar seguimiento</Text>
+                          <Text style={styles.seguimientoHint}>
+                            Aviso diario al admin si el mensajero se demora
+                          </Text>
+                        </View>
+                        <Switch
+                          value={!!entrega.darSeguimiento}
+                          onValueChange={() => toggleSeguimiento(entrega)}
+                          trackColor={{ false: '#D1D5DB', true: '#C4B5FD' }}
+                          thumbColor={entrega.darSeguimiento ? '#7C3AED' : '#F3F4F6'}
+                        />
+                      </View>
+                    )}
                   </View>
                 )}
               </View>
@@ -938,6 +966,16 @@ const styles = StyleSheet.create({
   vinculadaText: { fontSize: 12, color: '#065F46', textAlign: 'center' },
   abiertaContainer: { marginTop: 8, padding: 8, backgroundColor: '#FEF3C7', borderRadius: 8 },
   abiertaText: { fontSize: 12, color: '#92400E', textAlign: 'center' },
+  seguimientoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  seguimientoLabel: { fontSize: 13, fontWeight: '600', color: '#1F2937' },
+  seguimientoHint: { fontSize: 11, color: '#6B7280', marginTop: 2 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
