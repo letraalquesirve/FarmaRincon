@@ -821,8 +821,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
+    paddingHorizontal: 8,
     borderRadius: 12,
     gap: 8,
+    overflow: 'hidden',
   },
   syncButtonLoad: {
     backgroundColor: '#3B82F6',
@@ -855,9 +857,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   syncButtonText: {
+    flexShrink: 1,
     color: 'white',
     fontWeight: '600',
-    fontSize: 14,
+    fontSize: 13,
+    textAlign: 'center',
   },
 
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', padding: 12, gap: 8 },
