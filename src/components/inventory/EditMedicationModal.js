@@ -14,6 +14,7 @@ import {
   Alert,
 } from 'react-native';
 import { X, Mic, Camera, Image as ImageIcon } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LoadingButton } from '../common/LoadingButton';
 import DatePickerInput from '../DatePickerInput';
 import CategoriaPicker from '../CategoriaPicker';
@@ -29,6 +30,7 @@ export const EditMedicationModal = ({
   playAudio,
   tomarFoto,
 }) => {
+  const insets = useSafeAreaInsets();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     nombre: '',
@@ -118,23 +120,31 @@ export const EditMedicationModal = ({
   // categoría sigue vacía, sin interrumpir con ninguna alerta.
   const sugerirCategoriaAlSalirDelNombre = async () => {
     const nombreActual = form.nombre?.trim();
-    if (!nombreActual || form.categoria) return;
+    const nombreOriginal = (medication?.nombre || '').trim();
+    // En Editar, categoría casi siempre viene prellenada con la actual del
+    // medicamento - así que "solo si está vacía" nunca se cumplía. Lo
+    // correcto aquí es: si el NOMBRE cambió de verdad respecto al original,
+    // volver a sugerir (y sí sobreescribir categoría/ubicación, porque la
+    // persona está corrigiendo el nombre a propósito).
+    if (!nombreActual || nombreActual === nombreOriginal) return;
 
     const parecido = await buscarCategoriaPorNombreParecido(nombreActual);
     if (!parecido) return;
 
     const ubicacion = await obtenerUbicacionDesdeCategoria(parecido.categoria);
-    setForm((prev) =>
-      prev.categoria ? prev : { ...prev, categoria: parecido.categoria, ubicacion: ubicacion || prev.ubicacion }
-    );
+    setForm((prev) => ({
+      ...prev,
+      categoria: parecido.categoria,
+      ubicacion: ubicacion || prev.ubicacion,
+    }));
   };
 
   return (
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.keyboardView}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[styles.keyboardView, { paddingBottom: insets.bottom }]}
         >
           <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
             <View style={styles.modalHeader}>
