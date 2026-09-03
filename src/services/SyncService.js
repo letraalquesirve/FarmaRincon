@@ -365,9 +365,11 @@ export const hasLocalData = async () => {
 // la mayoría del tiempo.
 //
 // IMPORTANTE: requiere que la colección 'usuarios' en PocketBase tenga
-// un campo de texto 'pushToken' (agregarlo a mano en el admin si no
-// existe todavía - si no existe, estas llamadas simplemente no hacen
-// nada, PocketBase ignora campos que no reconoce).
+// un campo de texto 'pushtoken' TODO EN MINÚSCULAS (agregarlo a mano en
+// el admin si no existe todavía - así, sin camelCase, para que coincida
+// con el resto de los campos de tu PocketBase, todos en minúsculas -
+// si no existe, estas llamadas simplemente no hacen nada, PocketBase
+// ignora campos que no reconoce).
 // ─────────────────────────────────────────────────────────────
 
 // Publica el token de este celular en PocketBase, buscando el registro
@@ -389,7 +391,7 @@ export const publicarPushTokenEnServidor = async (nombreUsuario, pushToken) => {
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pushToken }),
+        body: JSON.stringify({ pushtoken: pushToken }),
       }
     );
     return actualizar.ok;
@@ -410,7 +412,7 @@ export const obtenerTokensAdminsEnVivo = async () => {
     );
     if (!response.ok) return null; // null = "no se pudo" (distinto de [] = "sin admins con token")
     const data = await response.json();
-    return (data.items || []).filter((u) => u.pushToken).map((u) => u.pushToken);
+    return (data.items || []).filter((u) => u.pushtoken).map((u) => u.pushtoken);
   } catch (error) {
     console.error('Error obteniendo tokens de admins en vivo:', error);
     return null;
