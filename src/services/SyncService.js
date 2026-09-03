@@ -78,6 +78,7 @@ const patchBackupRecord = async (recordId, data) => {
 const lockBackup = async (recordId, usuario) => {
   return await patchBackupRecord(recordId, {
     estado: 'LOCK',
+    usuario, // quién tiene el bloqueo AHORA (no confundir con quién subió el archivo originalmente)
     notas: `Bloqueado por ${usuario} el ${new Date().toISOString()}`,
   });
 };
@@ -237,10 +238,15 @@ export const loadFromVPS = async (usuario, onProgress) => {
         console.warn('No se pudo guardar la info del backup cargado:', e);
       }
 
-      if (latestBackup.estado === 'UNLOCK') {
-        // Estaba libre: este usuario la toma para editar. Solo él podrá
-        // subir la próxima versión hasta que la suba (o hasta que un
-        // administrador libere el bloqueo manualmente en PocketBase).
+      const normalizar = (n) => (n || '').trim().toLowerCase();
+      const yaEsMio = latestBackup.estado === 'LOCK' && normalizar(latestBackup.usuario) === normalizar(usuario);
+
+      if (latestBackup.estado === 'UNLOCK' || yaEsMio) {
+        // Estaba libre, o ya estaba bloqueada por MÍ mismo (ej. reinstalé
+        // la app y perdí el dato local, pero sigo siendo la misma persona)
+        // - la tomo/reafirmo para editar. Solo yo podré subir la próxima
+        // versión hasta que la suba (o hasta que un administrador libere
+        // el bloqueo manualmente en PocketBase).
         try {
           await lockBackup(latestBackup.id, usuario);
           await AsyncStorage.setItem(
@@ -255,9 +261,10 @@ export const loadFromVPS = async (usuario, onProgress) => {
           );
         }
       } else {
-        // Ya estaba bloqueada por otra persona: esto es solo lectura,
-        // no reclamamos el bloqueo. Limpiar cualquier bloqueo local viejo
-        // de este dispositivo para no confundir un intento de subida futuro.
+        // Ya estaba bloqueada por otra persona DISTINTA: esto es solo
+        // lectura, no reclamamos el bloqueo. Limpiar cualquier bloqueo
+        // local viejo de este dispositivo para no confundir un intento
+        // de subida futuro.
         await AsyncStorage.removeItem('miLockActual');
         onProgress?.(
           '👀 Cargado en modo solo lectura: otra persona está editando la base de datos ahora mismo.'
@@ -295,19 +302,12 @@ export const saveToVPS = async (usuario, onProgress) => {
     onProgress?.('🔒 Verificando si hay un bloqueo activo...');
     const lockActivo = await getActiveLock();
 
-    let miLock = null;
-    try {
-      const raw = await AsyncStorage.getItem('miLockActual');
-      miLock = raw ? JSON.parse(raw) : null;
-    } catch (e) {
-      // sin lock local guardado
-    }
+    const normalizar = (n) => (n || '').trim().toLowerCase();
+    const soyYoQuienLoTiene = lockActivo && normalizar(lockActivo.usuario) === normalizar(usuario);
 
-    if (lockActivo && (!miLock || miLock.recordId !== lockActivo.id)) {
-      // Hay alguien más editando (o este dispositivo nunca la bajó/bloqueó)
-      const notas = lockActivo.notas || '';
-      const match = notas.match(/Bloqueado por (.+?) el/);
-      const quien = match ? match[1] : lockActivo.usuario || 'otra persona';
+    if (lockActivo && !soyYoQuienLoTiene) {
+      // Hay alguien MÁS (persona distinta) editando ahora mismo
+      const quien = lockActivo.usuario || 'otra persona';
       onProgress?.(
         `🔒 No se puede subir: la base de datos está bloqueada por ${quien}, que la está editando ahora mismo. Espera a que termine y suba sus cambios, o pide a un administrador que libere el bloqueo manualmente en PocketBase.`
       );
@@ -329,7 +329,7 @@ export const saveToVPS = async (usuario, onProgress) => {
       // Cerrar el registro que teníamos bloqueado (si había uno) y limpiar
       // el bloqueo local — la base recién subida queda UNLOCK, libre para
       // que cualquiera la tome después.
-      if (lockActivo && miLock && miLock.recordId === lockActivo.id) {
+      if (lockActivo && soyYoQuienLoTiene) {
         try {
           await closeBackup(lockActivo.id);
         } catch (e) {
