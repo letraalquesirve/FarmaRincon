@@ -379,7 +379,7 @@ export default function InventoryScreen({ user }) {
       }
     } catch (error) {
       console.error('Error tomando foto:', error);
-      Alert.alert('Error', 'No se pudo obtener la imagen');
+      Alert.alert('Error', `No se pudo obtener la imagen: ${error?.message || String(error)}`);
     }
   };
 
