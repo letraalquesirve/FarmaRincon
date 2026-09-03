@@ -20,6 +20,10 @@ import {
   usuarioDelete,
   usuarioGetByNombre,
 } from '../services/LocalDataService';
+import {
+  publicarUsuarioEnServidor,
+  eliminarUsuarioEnServidor,
+} from '../services/SyncService';
 
 export default function UsuariosScreen({ visible, onClose, user: usuarioActual }) {
   const insets = useSafeAreaInsets();
@@ -90,6 +94,17 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
 
       setModalVisible(false);
       await cargarUsuarios();
+
+      // Publicar en PocketBase (requiere red) - así el usuario nuevo/editado
+      // puede empezar a recibir notificaciones sin esperar un ciclo de
+      // Cargar/Salvar BD
+      const publicado = await publicarUsuarioEnServidor(nombreLimpio, tipoForm);
+      if (!publicado) {
+        Alert.alert(
+          'Guardado localmente',
+          `${nombreLimpio} se guardó en este celular, pero no se pudo publicar en el servidor (revisa tu conexión). Sus notificaciones no funcionarán hasta que alguien lo publique con internet.`
+        );
+      }
     } catch (error) {
       console.error('Error guardando usuario:', error);
       Alert.alert('Error', 'No se pudo guardar el usuario');
@@ -114,6 +129,7 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
             try {
               await usuarioDelete(item.id);
               await cargarUsuarios();
+              await eliminarUsuarioEnServidor(item.nombre);
             } catch (error) {
               console.error('Error eliminando usuario:', error);
               Alert.alert('Error', 'No se pudo eliminar el usuario');
@@ -160,6 +176,13 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
           <TouchableOpacity onPress={onClose}>
             <X color="#6B7280" size={26} />
           </TouchableOpacity>
+        </View>
+
+        <View style={styles.avisoInternet}>
+          <Text style={styles.avisoInternetText}>
+            📶 Necesitas internet al crear o editar un usuario, para que se publique en el
+            servidor y pueda recibir notificaciones.
+          </Text>
         </View>
 
         {loading ? (
@@ -267,6 +290,12 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#1F2937' },
   emptyText: { textAlign: 'center', color: '#9CA3AF', marginTop: 40, fontSize: 14 },
+  avisoInternet: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  avisoInternetText: { fontSize: 12, color: '#92400E' },
   card: {
     flexDirection: 'row',
     alignItems: 'center',

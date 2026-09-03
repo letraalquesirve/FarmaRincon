@@ -416,3 +416,69 @@ export const obtenerTokensAdminsEnVivo = async () => {
     return null;
   }
 };
+
+// Publica un usuario (creado o editado en la App) directo en PocketBase,
+// sin pasar por el candado pesado de la BD completa - así cualquier
+// usuario nuevo (sobre todo admins) puede empezar a recibir push sin
+// esperar un ciclo completo de Cargar/Salvar BD. Si ya existe (por
+// nombre), lo actualiza; si no, lo crea. Requiere red - si falla, quien
+// llama debe avisar que el usuario quedó pendiente de subir.
+export const publicarUsuarioEnServidor = async (nombre, tipo) => {
+  try {
+    const buscar = await fetch(
+      `${VPS_BASE_URL}/api/collections/usuarios/records?filter=${encodeURIComponent(
+        `nombre="${nombre}"`
+      )}`
+    );
+    if (!buscar.ok) return false;
+    const data = await buscar.json();
+    const existente = (data.items || [])[0];
+
+    if (existente) {
+      const actualizar = await fetch(
+        `${VPS_BASE_URL}/api/collections/usuarios/records/${existente.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tipo }),
+        }
+      );
+      return actualizar.ok;
+    }
+
+    const crear = await fetch(`${VPS_BASE_URL}/api/collections/usuarios/records`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre, tipo }),
+    });
+    return crear.ok;
+  } catch (error) {
+    console.error('Error publicando usuario en servidor:', error);
+    return false;
+  }
+};
+
+// Elimina (por nombre) el registro de usuario en PocketBase, para que no
+// quede huérfano ahí cuando se borra desde la App
+export const eliminarUsuarioEnServidor = async (nombre) => {
+  try {
+    const buscar = await fetch(
+      `${VPS_BASE_URL}/api/collections/usuarios/records?filter=${encodeURIComponent(
+        `nombre="${nombre}"`
+      )}`
+    );
+    if (!buscar.ok) return false;
+    const data = await buscar.json();
+    const existente = (data.items || [])[0];
+    if (!existente) return true; // ya no estaba, nada que borrar
+
+    const borrar = await fetch(
+      `${VPS_BASE_URL}/api/collections/usuarios/records/${existente.id}`,
+      { method: 'DELETE' }
+    );
+    return borrar.ok;
+  } catch (error) {
+    console.error('Error eliminando usuario en servidor:', error);
+    return false;
+  }
+};
