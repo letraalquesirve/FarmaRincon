@@ -23,8 +23,10 @@ import {
   medicamentosList,
 } from '../services/LocalDataService';
 import { normalizeSearchTerm } from '../utils/normalizeText';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function CategoriasAdminModal({ visible, onClose }) {
+  const insets = useSafeAreaInsets();
   const [categorias, setCategorias] = useState([]);
   const [loading, setLoading] = useState(true);
   const [formVisible, setFormVisible] = useState(false);
@@ -292,7 +294,10 @@ export default function CategoriasAdminModal({ visible, onClose }) {
           />
         )}
 
-        <TouchableOpacity style={styles.fab} onPress={abrirCrear}>
+        <TouchableOpacity
+          style={[styles.fab, { bottom: 20 + insets.bottom }]}
+          onPress={abrirCrear}
+        >
           <Plus color="white" size={26} />
         </TouchableOpacity>
 

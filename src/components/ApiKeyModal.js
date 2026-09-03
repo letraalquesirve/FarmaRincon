@@ -10,9 +10,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { Key, X } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ApiKeyModal({ visible, onClose, onSave }) {
+  const insets = useSafeAreaInsets();
   const [apiKey, setApiKey] = useState('');
 
   const handleSave = async () => {
@@ -36,7 +38,7 @@ export default function ApiKeyModal({ visible, onClose, onSave }) {
       transparent={true}
       statusBarTranslucent={true}
     >
-      <View style={styles.modalOverlay}>
+      <View style={[styles.modalOverlay, { paddingBottom: insets.bottom }]}>
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Key color="#4F46E5" size={24} />

@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Users, Plus, Shield, User as UserIcon, Trash2, X, Check } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   usuariosList,
   usuarioCreate,
@@ -21,6 +22,7 @@ import {
 } from '../services/LocalDataService';
 
 export default function UsuariosScreen({ visible, onClose, user: usuarioActual }) {
+  const insets = useSafeAreaInsets();
   const [usuarios, setUsuarios] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
@@ -174,7 +176,10 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
           />
         )}
 
-        <TouchableOpacity style={styles.fab} onPress={abrirCrear}>
+        <TouchableOpacity
+          style={[styles.fab, { bottom: 20 + insets.bottom }]}
+          onPress={abrirCrear}
+        >
           <Plus color="white" size={26} />
         </TouchableOpacity>
 

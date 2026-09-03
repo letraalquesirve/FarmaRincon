@@ -13,6 +13,7 @@ import {
   Alert,
 } from 'react-native';
 import { X } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LoadingButton } from '../common/LoadingButton';
 import DatePickerInput from '../DatePickerInput';
 import CategoriaPicker from '../CategoriaPicker';
@@ -24,6 +25,7 @@ export const DuplicateMedicationModal = ({
   onSave,
   obtenerUbicacionDesdeCategoria,
 }) => {
+  const insets = useSafeAreaInsets();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     nombre: '',
@@ -77,8 +79,8 @@ export const DuplicateMedicationModal = ({
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.keyboardView}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[styles.keyboardView, { paddingBottom: insets.bottom }]}
         >
           <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
             <View style={styles.modalHeader}>
