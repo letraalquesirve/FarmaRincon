@@ -29,7 +29,8 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { sendLocalNotification } from '../services/NotificationService';
 import { notificarSeguimientoEntrega } from '../services/AdminNotificationService';
 import {
@@ -46,6 +47,8 @@ import {
 } from '../services/LocalDataService';
 
 export default function EntregasScreen({ user }) {
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const isUserAdmin = user?.tipo === 'admin';
   const [entregas, setEntregas] = useState([]);
   const [medicamentos, setMedicamentos] = useState([]);
@@ -55,6 +58,17 @@ export default function EntregasScreen({ user }) {
   const [expandedId, setExpandedId] = useState(null);
   const [filter, setFilter] = useState('todas');
   const [searchTerm, setSearchTerm] = useState('');
+  const route = useRoute();
+  const filterDestino = route.params?.filterDestino;
+
+  useFocusEffect(
+    useCallback(() => {
+      if (filterDestino) {
+        setSearchTerm(filterDestino);
+        navigation.setParams({ filterDestino: null });
+      }
+    }, [filterDestino])
+  );
 
   const [destino, setDestino] = useState('');
   const [notas, setNotas] = useState('');
@@ -139,7 +153,10 @@ export default function EntregasScreen({ user }) {
   const buscarMedicamentos = (texto) => {
     setBusqueda(texto);
     if (!texto.trim()) {
-      setMedicamentosFiltrados([]);
+      // Lista completa por defecto - se filtra escribiendo, sin arrancar
+      // en blanco ni caer de vuelta a "todos" cuando de verdad no hay
+      // resultados para lo que se busca
+      setMedicamentosFiltrados(medicamentos);
       return;
     }
     const textoLower = texto.toLowerCase().trim();
@@ -518,6 +535,11 @@ export default function EntregasScreen({ user }) {
             value={searchTerm}
             onChangeText={setSearchTerm}
           />
+          {searchTerm !== '' && (
+            <TouchableOpacity onPress={() => setSearchTerm('')} hitSlop={10}>
+              <X color="#9CA3AF" size={20} />
+            </TouchableOpacity>
+          )}
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersScroll}>
           <TouchableOpacity
@@ -674,7 +696,7 @@ export default function EntregasScreen({ user }) {
         transparent={true}
         onRequestClose={resetForm}
       >
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { paddingBottom: insets.bottom }]}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Nueva Entrega</Text>
@@ -710,7 +732,7 @@ export default function EntregasScreen({ user }) {
                     setSeleccionTemporalMed([]);
                     setCantidadesTemp({});
                     setBusqueda('');
-                    setMedicamentosFiltrados([]);
+                    setMedicamentosFiltrados(medicamentos);
                     setShowSelectMedModal(true);
                   }}
                 >
@@ -728,7 +750,7 @@ export default function EntregasScreen({ user }) {
                       setSeleccionTemporalMed([]);
                       setCantidadesTemp({});
                       setBusqueda('');
-                      setMedicamentosFiltrados([]);
+                      setMedicamentosFiltrados(medicamentos);
                       setShowSelectMedModal(true);
                     }}
                   >
@@ -785,7 +807,7 @@ export default function EntregasScreen({ user }) {
 
       {/* MODAL SELECCIONAR MEDICAMENTOS */}
       <Modal visible={showSelectMedModal} animationType="slide" transparent={false}>
-        <View style={styles.fullModalContainer}>
+        <View style={[styles.fullModalContainer, { paddingBottom: insets.bottom }]}>
           <View style={styles.fullModalHeader}>
             <Text style={styles.fullModalTitle}>Seleccionar Medicamentos</Text>
             <TouchableOpacity
@@ -811,7 +833,7 @@ export default function EntregasScreen({ user }) {
           </View>
 
           <FlatList
-            data={medicamentosFiltrados.length > 0 ? medicamentosFiltrados : medicamentos}
+            data={medicamentosFiltrados}
             keyExtractor={(item) => item.id}
             style={styles.flatList}
             renderItem={({ item }) => (

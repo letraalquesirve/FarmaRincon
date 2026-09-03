@@ -48,8 +48,10 @@ import {
   medicamentosList,
 } from '../services/LocalDataService';
 import { useRoute, useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function PedidosScreen({ user }) {
+  const insets = useSafeAreaInsets();
   const isUserAdmin = user?.tipo === 'admin';
   const [pedidos, setPedidos] = useState([]);
   const [entregas, setEntregas] = useState([]);
@@ -83,12 +85,14 @@ export default function PedidosScreen({ user }) {
   const route = useRoute();
   const filterSolicitante = route.params?.filterSolicitante;
 
-  useEffect(() => {
-    if (filterSolicitante) {
-      setSearchTerm(filterSolicitante);
-      navigation.setParams({ filterSolicitante: null });
-    }
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      if (filterSolicitante) {
+        setSearchTerm(filterSolicitante);
+        navigation.setParams({ filterSolicitante: null });
+      }
+    }, [filterSolicitante])
+  );
 
   // Refs para evitar cargas duplicadas y manejar suscripciones
   const isLoadingRef = useRef(false);
@@ -151,7 +155,9 @@ export default function PedidosScreen({ user }) {
   // El resto del código permanece igual (buscarMedicamentos, actualizarCantidad, etc.)
   const buscarMedicamentos = (texto) => {
     if (!texto.trim()) {
-      setMedicamentosFiltrados([]);
+      // Lista completa por defecto - se puede filtrar escribiendo, en vez
+      // de empezar en blanco y obligar a escribir para ver algo
+      setMedicamentosFiltrados(medicamentos);
       return;
     }
     const textoLower = texto.toLowerCase().trim();
@@ -435,7 +441,7 @@ export default function PedidosScreen({ user }) {
     setSeleccionTemporal([]);
     setBusqueda('');
     setCantidades({});
-    setMedicamentosFiltrados([]);
+    setMedicamentosFiltrados(medicamentos); // lista completa desde el primer momento
     setShowMedicamentoModal(true);
   };
 
@@ -473,6 +479,11 @@ export default function PedidosScreen({ user }) {
             value={searchTerm}
             onChangeText={setSearchTerm}
           />
+          {searchTerm !== '' && (
+            <TouchableOpacity onPress={() => setSearchTerm('')} hitSlop={10}>
+              <X color="#9CA3AF" size={20} />
+            </TouchableOpacity>
+          )}
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersScroll}>
           <TouchableOpacity
@@ -660,7 +671,7 @@ export default function PedidosScreen({ user }) {
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}
+            style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: insets.bottom }}
           >
             <ScrollView
               style={styles.modalContent}
@@ -754,7 +765,7 @@ export default function PedidosScreen({ user }) {
       </Modal>
 
       <Modal visible={showMedicamentoModal} animationType="slide" transparent={false}>
-        <View style={styles.fullModalContainer}>
+        <View style={[styles.fullModalContainer, { paddingBottom: insets.bottom }]}>
           <View style={styles.fullModalHeader}>
             <Text style={styles.fullModalTitle}>Seleccionar Medicamentos</Text>
             <TouchableOpacity
@@ -780,6 +791,17 @@ export default function PedidosScreen({ user }) {
                 buscarMedicamentos(text);
               }}
             />
+            {busqueda !== '' && (
+              <TouchableOpacity
+                onPress={() => {
+                  setBusqueda('');
+                  buscarMedicamentos('');
+                }}
+                hitSlop={10}
+              >
+                <XCircle size={20} color="#9CA3AF" />
+              </TouchableOpacity>
+            )}
           </View>
           <FlatList
             data={medicamentosFiltrados}
@@ -874,7 +896,7 @@ export default function PedidosScreen({ user }) {
       </Modal>
 
       <Modal visible={showAtenderModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { paddingBottom: insets.bottom }]}>
           <View style={styles.modalContentLarge}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Atender Pedido con Entregas</Text>
