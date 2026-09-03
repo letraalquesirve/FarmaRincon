@@ -5,6 +5,7 @@ import {
   sendPushNotification,
 } from './NotificationService';
 import { usuariosList, usuarioUpdate, entregasList, medicamentosList } from './LocalDataService';
+import { publicarPushTokenEnServidor, obtenerTokensAdminsEnVivo } from './SyncService';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 
 const CLAVE_COLA_PENDIENTE = 'colaNotificacionesPendientes';
@@ -22,9 +23,14 @@ export const registrarPushTokenUsuarioActual = async (usuario) => {
   if (!usuario?.id) return;
   try {
     const token = await registerForPushNotifications();
-    if (token && token !== usuario.pushToken) {
+    if (!token) return;
+    if (token !== usuario.pushToken) {
       await usuarioUpdate(usuario.id, { pushToken: token });
     }
+    // Siempre publica en vivo (no solo cuando cambió localmente), porque
+    // el registro en PocketBase puede seguir teniendo uno viejo o ninguno
+    // aunque este celular ya lo tuviera guardado de antes.
+    await publicarPushTokenEnServidor(usuario.nombre, token);
   } catch (error) {
     console.error('Error registrando token de push:', error);
   }
@@ -106,6 +112,12 @@ const enviarATokens = async (tokens, title, body, data) => {
 };
 
 const obtenerTokensAdmins = async () => {
+  // Intenta primero en vivo directo de PocketBase (siempre actualizado,
+  // no depende de que alguien haya hecho un ciclo completo de sincronía).
+  // Si no hay red o falla, cae a la copia local como mejor esfuerzo.
+  const enVivo = await obtenerTokensAdminsEnVivo();
+  if (enVivo !== null) return enVivo;
+
   const usuarios = await usuariosList();
   return usuarios
     .filter((u) => u.tipo === 'admin' && u.pushToken)
@@ -169,15 +181,17 @@ export const notificarSeguimientoEntrega = async (entrega) => {
 };
 
 export const ejecutarChequeoDiario = async () => {
+  const resumen = { porVencer: [], seguimiento: [], tokensDisponibles: 0 };
   try {
-    if (await yaSeChecoHoy()) return;
+    if (await yaSeChecoHoy()) return resumen;
 
     const tokens = await obtenerTokensAdmins();
+    resumen.tokensDisponibles = tokens.length;
     // Igual marcamos el día como chequeado aunque no haya admins con token
     // todavía - evita que se repita el intento de armar las listas cada
     // vez que se abra la app el mismo día.
     await marcarChequeadoHoy();
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) return resumen;
 
     // ── Vencimientos ──
     const activos = await medicamentosList(true);
@@ -191,6 +205,7 @@ export const ejecutarChequeoDiario = async () => {
       await enviarATokens(tokens, `⚠️ ${porVencer.length} medicamento(s) por vencer`, lista, {
         tipo: 'vencimientos',
       });
+      resumen.porVencer = porVencer.map((m) => m.nombre);
     }
 
     // ── Seguimiento de entregas ──
@@ -199,17 +214,22 @@ export const ejecutarChequeoDiario = async () => {
 
     for (const entrega of conSeguimiento) {
       await notificarSeguimientoEntrega(entrega);
+      resumen.seguimiento.push(entrega.destino);
     }
+
+    return resumen;
   } catch (error) {
     console.error('Error en chequeo diario de notificaciones:', error);
+    return resumen;
   }
 };
 
 // Fuerza el chequeo diario ahora mismo, sin esperar al próximo día -
 // limpia la marca de "ya se chequeó hoy" y vuelve a correrlo. Útil para
 // pruebas, y también para uso real si un admin quiere forzar un chequeo
-// sin esperar.
+// sin esperar. Devuelve un resumen de qué se mandó, para mostrarlo en
+// pantalla.
 export const forzarChequeoDiario = async () => {
   await AsyncStorage.removeItem(CLAVE_ULTIMO_CHEQUEO_DIARIO);
-  await ejecutarChequeoDiario();
+  return await ejecutarChequeoDiario();
 };

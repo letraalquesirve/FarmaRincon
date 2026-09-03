@@ -94,8 +94,23 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
         {
           text: 'Revisar ahora',
           onPress: async () => {
-            await forzarChequeoDiario();
-            Alert.alert('Listo', 'Chequeo realizado. Si había algo que avisar, ya se envió.');
+            const resumen = await forzarChequeoDiario();
+            const partes = [];
+            if (resumen.tokensDisponibles === 0) {
+              partes.push('No hay ningún admin con notificaciones registradas todavía.');
+            } else {
+              partes.push(
+                resumen.porVencer.length > 0
+                  ? `⚠️ Por vencer (${resumen.porVencer.length}): ${resumen.porVencer.join(', ')}`
+                  : '✅ Sin medicamentos por vencer.'
+              );
+              partes.push(
+                resumen.seguimiento.length > 0
+                  ? `🚚 Seguimiento enviado a: ${resumen.seguimiento.join(', ')}`
+                  : 'Sin entregas en seguimiento.'
+              );
+            }
+            Alert.alert('Chequeo realizado', partes.join('\n\n'));
           },
         },
       ]
@@ -647,12 +662,18 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
           </TouchableOpacity>
           {showPedidosPendientes &&
             pedidosPendientes.map((pedido) => (
-              <View key={pedido.id} style={styles.pedidoCard}>
+              <TouchableOpacity
+                key={pedido.id}
+                style={styles.pedidoCard}
+                onPress={() =>
+                  navigation.navigate('Pedidos', { filterSolicitante: pedido.nombreSolicitante })
+                }
+              >
                 <Text style={styles.pedidoNombre}>{pedido.nombreSolicitante}</Text>
                 <Text style={styles.pedidoInfo}>
                   {pedido.medicamentosSolicitados?.length || 0} medicamentos
                 </Text>
-              </View>
+              </TouchableOpacity>
             ))}
         </View>
       )}
@@ -673,10 +694,14 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
           </TouchableOpacity>
           {showEntregasAbiertas &&
             entregasAbiertas.map((entrega) => (
-              <View key={entrega.id} style={styles.entregaCard}>
+              <TouchableOpacity
+                key={entrega.id}
+                style={styles.entregaCard}
+                onPress={() => navigation.navigate('Entregas', { filterDestino: entrega.destino })}
+              >
                 <Text style={styles.entregaDestino}>{entrega.destino}</Text>
                 <Text style={styles.entregaInfo}>{entrega.items?.length || 0} medicamentos</Text>
-              </View>
+              </TouchableOpacity>
             ))}
         </View>
       )}

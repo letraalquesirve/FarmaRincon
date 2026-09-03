@@ -356,3 +356,63 @@ export const hasLocalData = async () => {
   const totalRecords = Object.values(status).reduce((a, b) => a + b, 0);
   return totalRecords > 0;
 };
+
+// ─────────────────────────────────────────────────────────────
+// TOKENS DE PUSH: van DIRECTO a PocketBase, sin pasar por el candado
+// pesado de la BD completa. Es un dato chiquito y necesita estar
+// fresco para que las notificaciones funcionen entre celulares -
+// esperar al ciclo lento de Cargar/Salvar BD lo dejaría desactualizado
+// la mayoría del tiempo.
+//
+// IMPORTANTE: requiere que la colección 'usuarios' en PocketBase tenga
+// un campo de texto 'pushToken' (agregarlo a mano en el admin si no
+// existe todavía - si no existe, estas llamadas simplemente no hacen
+// nada, PocketBase ignora campos que no reconoce).
+// ─────────────────────────────────────────────────────────────
+
+// Publica el token de este celular en PocketBase, buscando el registro
+// del usuario por nombre (case-insensitive)
+export const publicarPushTokenEnServidor = async (nombreUsuario, pushToken) => {
+  try {
+    const buscar = await fetch(
+      `${VPS_BASE_URL}/api/collections/usuarios/records?filter=${encodeURIComponent(
+        `nombre="${nombreUsuario}"`
+      )}`
+    );
+    if (!buscar.ok) return false;
+    const data = await buscar.json();
+    const registro = (data.items || [])[0];
+    if (!registro) return false;
+
+    const actualizar = await fetch(
+      `${VPS_BASE_URL}/api/collections/usuarios/records/${registro.id}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pushToken }),
+      }
+    );
+    return actualizar.ok;
+  } catch (error) {
+    console.error('Error publicando push token en servidor:', error);
+    return false;
+  }
+};
+
+// Trae, en vivo, los tokens de todos los admins directo de PocketBase
+// (no de la copia local, que puede estar desactualizada)
+export const obtenerTokensAdminsEnVivo = async () => {
+  try {
+    const response = await fetch(
+      `${VPS_BASE_URL}/api/collections/usuarios/records?filter=${encodeURIComponent(
+        `tipo="admin"`
+      )}&perPage=200`
+    );
+    if (!response.ok) return null; // null = "no se pudo" (distinto de [] = "sin admins con token")
+    const data = await response.json();
+    return (data.items || []).filter((u) => u.pushToken).map((u) => u.pushToken);
+  } catch (error) {
+    console.error('Error obteniendo tokens de admins en vivo:', error);
+    return null;
+  }
+};
