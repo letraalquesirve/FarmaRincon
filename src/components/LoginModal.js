@@ -10,14 +10,17 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { Key, LogIn, X, Download } from 'lucide-react-native';
+import { Key, LogIn, X, Download, FolderOpen } from 'lucide-react-native';
+import * as DocumentPicker from 'expo-document-picker';
 import { loadFromVPS } from '../services/SyncService';
+import { importDatabaseFromFile } from '../services/SQLiteService';
 
 export default function LoginModal({ visible, onLogin, onClose }) {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadMsg, setDownloadMsg] = useState('');
+  const [importando, setImportando] = useState(false);
 
   const handleLogin = async () => {
     const trimmedUsername = username.trim();
@@ -64,6 +67,43 @@ export default function LoginModal({ visible, onLogin, onClose }) {
     }
   };
 
+  // Primer arranque SIN internet (celular nuevo con un archivo de
+  // respaldo pasado por USB/Bluetooth/etc., en vez de bajarlo del
+  // servidor): importar directo del almacenamiento del celular, sin
+  // tocar PocketBase para nada.
+  const handleImportarArchivo = async () => {
+    if (importando) return;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) return;
+
+      const fileUri = result.assets?.[0]?.uri;
+      if (!fileUri) {
+        Alert.alert('Error', 'No se pudo leer el archivo seleccionado');
+        return;
+      }
+
+      setImportando(true);
+      const ok = await importDatabaseFromFile(fileUri);
+      if (ok) {
+        Alert.alert(
+          'Listo',
+          'Se importó la base de datos desde el archivo. Ahora intenta iniciar sesión.'
+        );
+      } else {
+        Alert.alert('Error', 'No se pudo importar ese archivo (¿es un backup válido?)');
+      }
+    } catch (error) {
+      console.error('Error importando BD inicial:', error);
+      Alert.alert('Error', 'No se pudo importar ese archivo');
+    } finally {
+      setImportando(false);
+    }
+  };
+
   return (
     <Modal visible={visible} transparent={true} animationType="fade" statusBarTranslucent={true}>
       <View style={styles.modalOverlay}>
@@ -106,7 +146,7 @@ export default function LoginModal({ visible, onLogin, onClose }) {
           <TouchableOpacity
             style={styles.downloadButton}
             onPress={handleDownloadFromServer}
-            disabled={downloading}
+            disabled={downloading || importando}
           >
             {downloading ? (
               <>
@@ -118,6 +158,26 @@ export default function LoginModal({ visible, onLogin, onClose }) {
                 <Download color="#4F46E5" size={18} />
                 <Text style={styles.downloadButtonText}>
                   Primera vez o BD vacía: descargar del servidor
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.downloadButton}
+            onPress={handleImportarArchivo}
+            disabled={downloading || importando}
+          >
+            {importando ? (
+              <>
+                <ActivityIndicator color="#4F46E5" size="small" />
+                <Text style={styles.downloadButtonText}>Importando...</Text>
+              </>
+            ) : (
+              <>
+                <FolderOpen color="#4F46E5" size={18} />
+                <Text style={styles.downloadButtonText}>
+                  Sin internet: importar archivo desde el celular
                 </Text>
               </>
             )}
