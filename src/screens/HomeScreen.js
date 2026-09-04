@@ -27,6 +27,7 @@ import {
   Download,
   Tag,
   Bell,
+  Send,
   Share2,
   FolderOpen,
   Users,
@@ -42,7 +43,10 @@ import {
 } from '../services/SQLiteService';
 import { medicamentosList, pedidosList, entregasList } from '../services/LocalDataService';
 import CategoriasAdminModal from '../components/CategoriasAdminModal';
-import { forzarChequeoDiario } from '../services/AdminNotificationService';
+import {
+  forzarChequeoDiario,
+  registrarPushTokenUsuarioActual,
+} from '../services/AdminNotificationService';
 import UsuariosScreen from './UsuariosScreen';
 
 export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
@@ -85,6 +89,15 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
   // Fuerza el chequeo diario de vencimientos/seguimiento ahora mismo, sin
   // esperar al día siguiente (solo admin) - útil para pruebas y para
   // forzar un aviso manual si hace falta.
+  // Prueba manual del registro de push de ESTE dispositivo, con
+  // resultado visible en pantalla - a diferencia del intento automático
+  // al abrir la app (silencioso), esto muestra exactamente por qué
+  // falló si falla (permiso, Firebase, red, etc.)
+  const handleProbarNotificaciones = async () => {
+    const resultado = await registrarPushTokenUsuarioActual(user);
+    Alert.alert(resultado.ok ? '✅ Notificaciones OK' : '❌ No se pudo registrar', resultado.motivo);
+  };
+
   const handleForzarChequeoDiario = async () => {
     Alert.alert(
       'Forzar chequeo de notificaciones',
@@ -542,6 +555,9 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
               <Bell color="white" size={20} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity style={styles.apiKeyButton} onPress={handleProbarNotificaciones}>
+            <Send color="white" size={18} />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>
             <Key color="white" size={20} />
           </TouchableOpacity>

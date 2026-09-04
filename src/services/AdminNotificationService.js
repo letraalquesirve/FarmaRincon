@@ -19,20 +19,40 @@ const DIAS_PARA_VENCER = 30; // mismo umbral que ya usa Inicio para "Por Vencer"
 // Registra (o refresca) el token de push de este dispositivo y lo guarda
 // en el registro local del usuario logueado. Sirve para cualquier usuario
 // (no solo admin) - el filtrado de a quién se le avisa ocurre al enviar.
+// Registra el token de este dispositivo y lo publica en PocketBase.
+// Devuelve un resultado detallado (no solo true/false) para poder
+// mostrarlo en pantalla cuando se dispara a mano (botón de prueba) - la
+// versión silenciosa (llamada automática al abrir la app) simplemente
+// ignora el detalle si no le interesa.
 export const registrarPushTokenUsuarioActual = async (usuario) => {
-  if (!usuario?.id) return;
+  if (!usuario?.id) return { ok: false, motivo: 'No hay usuario logueado' };
   try {
     const token = await registerForPushNotifications();
-    if (!token) return;
+    if (!token) {
+      return {
+        ok: false,
+        motivo:
+          'No se pudo obtener el token de este dispositivo (revisa el permiso de notificaciones, o si Firebase está bien configurado en este build).',
+      };
+    }
     if (token !== usuario.pushToken) {
       await usuarioUpdate(usuario.id, { pushToken: token });
     }
     // Siempre publica en vivo (no solo cuando cambió localmente), porque
     // el registro en PocketBase puede seguir teniendo uno viejo o ninguno
     // aunque este celular ya lo tuviera guardado de antes.
-    await publicarPushTokenEnServidor(usuario.nombre, token);
+    const publicado = await publicarPushTokenEnServidor(usuario.nombre, token);
+    if (!publicado) {
+      return {
+        ok: false,
+        motivo:
+          'Se obtuvo el token, pero no se pudo publicar en el servidor (revisa tu conexión, o que el usuario exista en PocketBase con ese mismo nombre).',
+      };
+    }
+    return { ok: true, motivo: 'Token registrado y publicado correctamente.' };
   } catch (error) {
     console.error('Error registrando token de push:', error);
+    return { ok: false, motivo: error?.message || String(error) };
   }
 };
 
