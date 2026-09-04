@@ -47,10 +47,11 @@ import {
   entregaUpdate,
   medicamentosList,
 } from '../services/LocalDataService';
-import { useRoute, useFocusEffect } from '@react-navigation/native';
+import { useRoute, useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function PedidosScreen({ user }) {
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const isUserAdmin = user?.tipo === 'admin';
   const [pedidos, setPedidos] = useState([]);
