@@ -27,12 +27,11 @@ const DIAS_PARA_VENCER = 30; // mismo umbral que ya usa Inicio para "Por Vencer"
 export const registrarPushTokenUsuarioActual = async (usuario) => {
   if (!usuario?.id) return { ok: false, motivo: 'No hay usuario logueado' };
   try {
-    const token = await registerForPushNotifications();
+    const { token, error } = await registerForPushNotifications();
     if (!token) {
       return {
         ok: false,
-        motivo:
-          'No se pudo obtener el token de este dispositivo (revisa el permiso de notificaciones, o si Firebase está bien configurado en este build).',
+        motivo: `No se pudo obtener el token de este dispositivo: ${error || 'motivo desconocido'}`,
       };
     }
     if (token !== usuario.pushToken) {

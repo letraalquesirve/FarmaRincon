@@ -124,19 +124,24 @@ export const setupNotificationChannel = async () => {
 // token de Expo. El guardado del token (en la tabla local de usuarios) lo
 // hace quien llama a esta función - este servicio ya no depende de
 // PocketBase para nada.
+// Devuelve { token, error } - error trae el motivo REAL del fallo
+// (permiso denegado, projectId faltante, o el mensaje exacto de la
+// excepción de Firebase/Expo), en vez de colapsar todo en null sin
+// forma de distinguir qué pasó.
 export const registerForPushNotifications = async () => {
   try {
     // 1. Verificar permisos
     const hasPermission = await requestPermissions();
-    if (!hasPermission) return null;
+    if (!hasPermission) {
+      return { token: null, error: 'Permiso de notificaciones denegado en este celular' };
+    }
 
     // 2. Obtener projectId desde Constants
     const Constants = require('expo-constants').default;
     const projectId = Constants.expoConfig?.extra?.eas?.projectId;
 
     if (!projectId) {
-      console.error('❌ No se encontró projectId en expoConfig');
-      return null;
+      return { token: null, error: 'No se encontró projectId en la configuración de la app' };
     }
 
     // 3. Configurar canal para Android
@@ -149,10 +154,10 @@ export const registerForPushNotifications = async () => {
 
     const token = tokenData.data;
     console.log('📱 Expo Push Token:', token);
-    return token;
+    return { token, error: null };
   } catch (error) {
     console.error('❌ Error registrando push notifications:', error);
-    return null;
+    return { token: null, error: error?.message || String(error) };
   }
 };
 
