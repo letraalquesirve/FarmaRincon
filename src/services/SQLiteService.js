@@ -82,6 +82,7 @@ export const initDatabase = async () => {
       nombre TEXT NOT NULL,
       tipo TEXT DEFAULT 'user',
       pushToken TEXT,
+      email TEXT,
       updated TEXT,
       _syncStatus TEXT DEFAULT 'synced',
       _pendingOp TEXT
@@ -154,6 +155,7 @@ const ejecutarMigraciones = async (dbInstance) => {
   await ensureColumn(dbInstance, 'medicamentos', 'reactivadoPor', 'TEXT');
   // usuarios: token de push (notificaciones)
   await ensureColumn(dbInstance, 'usuarios', 'pushToken', 'TEXT');
+  await ensureColumn(dbInstance, 'usuarios', 'email', 'TEXT');
   // entregas: seguimiento diario de mensajero
   await ensureColumn(dbInstance, 'entregas', 'darSeguimiento', 'INTEGER DEFAULT 0');
 };
@@ -559,13 +561,31 @@ export const saveUsuario = async (usuario, syncStatus = 'synced', pendingOp = nu
 
   if (exists) {
     await dbInstance.runAsync(
-      `UPDATE usuarios SET nombre = ?, tipo = ?, updated = ?, _syncStatus = ?, _pendingOp = ? WHERE id = ?`,
-      [usuario.nombre, usuario.tipo || 'user', now, syncStatus, pendingOp, usuario.id]
+      `UPDATE usuarios SET nombre = ?, tipo = ?, pushToken = ?, email = ?, updated = ?, _syncStatus = ?, _pendingOp = ? WHERE id = ?`,
+      [
+        usuario.nombre,
+        usuario.tipo || 'user',
+        usuario.pushToken || null,
+        usuario.email || null,
+        now,
+        syncStatus,
+        pendingOp,
+        usuario.id,
+      ]
     );
   } else {
     await dbInstance.runAsync(
-      `INSERT INTO usuarios (id, nombre, tipo, updated, _syncStatus, _pendingOp) VALUES (?, ?, ?, ?, ?, ?)`,
-      [usuario.id, usuario.nombre, usuario.tipo || 'user', now, syncStatus, pendingOp]
+      `INSERT INTO usuarios (id, nombre, tipo, pushToken, email, updated, _syncStatus, _pendingOp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        usuario.id,
+        usuario.nombre,
+        usuario.tipo || 'user',
+        usuario.pushToken || null,
+        usuario.email || null,
+        now,
+        syncStatus,
+        pendingOp,
+      ]
     );
   }
   return usuario;

@@ -33,6 +33,7 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
   const [editando, setEditando] = useState(null); // null = crear, objeto = editar
   const [nombreForm, setNombreForm] = useState('');
   const [tipoForm, setTipoForm] = useState('user');
+  const [emailForm, setEmailForm] = useState('');
   const [guardando, setGuardando] = useState(false);
 
   const cargarUsuarios = useCallback(async () => {
@@ -58,6 +59,7 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
     setEditando(null);
     setNombreForm('');
     setTipoForm('user');
+    setEmailForm('');
     setModalVisible(true);
   };
 
@@ -65,13 +67,19 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
     setEditando(item);
     setNombreForm(item.nombre);
     setTipoForm(item.tipo || 'user');
+    setEmailForm(item.email || '');
     setModalVisible(true);
   };
 
   const guardar = async () => {
     const nombreLimpio = nombreForm.trim();
+    const emailLimpio = emailForm.trim();
     if (!nombreLimpio) {
       Alert.alert('Falta el nombre', 'Escribe el nombre con el que esta persona iniciará sesión');
+      return;
+    }
+    if (emailLimpio && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLimpio)) {
+      Alert.alert('Email inválido', 'Revisa el correo, no parece válido (o déjalo vacío)');
       return;
     }
 
@@ -87,9 +95,9 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
       }
 
       if (editando) {
-        await usuarioUpdate(editando.id, { nombre: nombreLimpio, tipo: tipoForm });
+        await usuarioUpdate(editando.id, { nombre: nombreLimpio, tipo: tipoForm, email: emailLimpio });
       } else {
-        await usuarioCreate({ nombre: nombreLimpio, tipo: tipoForm });
+        await usuarioCreate({ nombre: nombreLimpio, tipo: tipoForm, email: emailLimpio });
       }
 
       setModalVisible(false);
@@ -98,7 +106,7 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
       // Publicar en PocketBase (requiere red) - así el usuario nuevo/editado
       // puede empezar a recibir notificaciones sin esperar un ciclo de
       // Cargar/Salvar BD
-      const publicado = await publicarUsuarioEnServidor(nombreLimpio, tipoForm);
+      const publicado = await publicarUsuarioEnServidor(nombreLimpio, tipoForm, emailLimpio);
       if (!publicado) {
         Alert.alert(
           'Guardado localmente',
@@ -226,6 +234,17 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
                 placeholder="ej. Maria"
                 autoCapitalize="words"
                 autoCorrect={false}
+              />
+
+              <Text style={styles.label}>Email (opcional - avisos por correo)</Text>
+              <TextInput
+                style={styles.input}
+                value={emailForm}
+                onChangeText={setEmailForm}
+                placeholder="ej. maria@correo.com"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
               />
 
               <Text style={styles.label}>Rol</Text>

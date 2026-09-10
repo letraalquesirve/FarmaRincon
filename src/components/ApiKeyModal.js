@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -16,18 +16,44 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export default function ApiKeyModal({ visible, onClose, onSave }) {
   const insets = useSafeAreaInsets();
   const [apiKey, setApiKey] = useState('');
+  const [brevoApiKey, setBrevoApiKey] = useState('');
+  const [brevoSenderEmail, setBrevoSenderEmail] = useState('');
+
+  useEffect(() => {
+    if (!visible) return;
+    (async () => {
+      try {
+        const [savedGemini, savedBrevoKey, savedBrevoSender] = await Promise.all([
+          AsyncStorage.getItem('gemini_api_key'),
+          AsyncStorage.getItem('brevo_api_key'),
+          AsyncStorage.getItem('brevo_sender_email'),
+        ]);
+        if (savedGemini) setApiKey(savedGemini);
+        if (savedBrevoKey) setBrevoApiKey(savedBrevoKey);
+        if (savedBrevoSender) setBrevoSenderEmail(savedBrevoSender);
+      } catch (error) {
+        console.error('Error cargando claves guardadas:', error);
+      }
+    })();
+  }, [visible]);
 
   const handleSave = async () => {
-    if (apiKey && apiKey.trim().startsWith('AIzaSy')) {
-      try {
-        await AsyncStorage.setItem('gemini_api_key', apiKey.trim());
-        onSave(apiKey.trim());
-        Alert.alert('Éxito', 'API Key configurada correctamente');
-      } catch (error) {
-        Alert.alert('Error', 'No se pudo guardar la API Key');
-      }
-    } else {
-      Alert.alert('Error', 'Por favor ingresa una API Key válida de Google Gemini');
+    if (apiKey && !apiKey.trim().startsWith('AIzaSy')) {
+      Alert.alert('Error', 'La API Key de Gemini no parece válida (debe empezar con AIzaSy)');
+      return;
+    }
+    if (brevoSenderEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(brevoSenderEmail.trim())) {
+      Alert.alert('Error', 'El correo remitente de Brevo no parece válido');
+      return;
+    }
+    try {
+      await AsyncStorage.setItem('gemini_api_key', apiKey.trim());
+      await AsyncStorage.setItem('brevo_api_key', brevoApiKey.trim());
+      await AsyncStorage.setItem('brevo_sender_email', brevoSenderEmail.trim());
+      onSave(apiKey.trim());
+      Alert.alert('Éxito', 'Configuración guardada correctamente');
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo guardar la configuración');
     }
   };
 
@@ -71,12 +97,41 @@ export default function ApiKeyModal({ visible, onClose, onSave }) {
               autoCapitalize="none"
             />
 
+            <View style={styles.separator} />
+
+            <Text style={styles.sectionTitle}>📧 Avisos por correo (opcional)</Text>
+            <Text style={styles.description}>
+              Para que las notificaciones también lleguen por email, configura una cuenta
+              gratis en brevo.com y pega aquí tu clave de API y el correo remitente que
+              verificaste ahí.
+            </Text>
+
+            <Text style={styles.inputLabel}>Brevo API Key</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="xkeysib-..."
+              value={brevoApiKey}
+              onChangeText={setBrevoApiKey}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <Text style={styles.inputLabel}>Correo remitente (verificado en Brevo)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="avisos@tudominio.com"
+              value={brevoSenderEmail}
+              onChangeText={setBrevoSenderEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+
             <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-              <Text style={styles.saveButtonText}>Guardar API Key</Text>
+              <Text style={styles.saveButtonText}>Guardar configuración</Text>
             </TouchableOpacity>
 
             <Text style={styles.footerText}>
-              🔒 Tu API Key se guarda solo en tu dispositivo. Es 100% privada y segura.
+              🔒 Todo se guarda solo en este dispositivo. Es 100% privado y seguro.
             </Text>
           </ScrollView>
         </View>
@@ -158,6 +213,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 20,
     backgroundColor: '#F9FAFB',
+  },
+  separator: {
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    marginVertical: 16,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#1F2937',
+    marginBottom: 6,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4B5563',
+    marginBottom: 6,
   },
   saveButton: {
     backgroundColor: '#7C3AED',

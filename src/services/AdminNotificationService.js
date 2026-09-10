@@ -4,8 +4,9 @@ import {
   registerForPushNotifications,
   sendPushNotification,
 } from './NotificationService';
+import { enviarEmail } from './EmailService';
 import { usuariosList, usuarioUpdate, entregasList, medicamentosList } from './LocalDataService';
-import { publicarPushTokenEnServidor, obtenerTokensAdminsEnVivo } from './SyncService';
+import { publicarPushTokenEnServidor, obtenerDestinatariosAdminsEnVivo } from './SyncService';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 
 const CLAVE_COLA_PENDIENTE = 'colaNotificacionesPendientes';
@@ -16,9 +17,6 @@ const DIAS_PARA_VENCER = 30; // mismo umbral que ya usa Inicio para "Por Vencer"
 // REGISTRO DEL TOKEN DE ESTE CELULAR
 // ─────────────────────────────────────────────────────────────
 
-// Registra (o refresca) el token de push de este dispositivo y lo guarda
-// en el registro local del usuario logueado. Sirve para cualquier usuario
-// (no solo admin) - el filtrado de a quién se le avisa ocurre al enviar.
 // Registra el token de este dispositivo y lo publica en PocketBase.
 // Devuelve un resultado detallado (no solo true/false) para poder
 // mostrarlo en pantalla cuando se dispara a mano (botón de prueba) - la
@@ -37,9 +35,6 @@ export const registrarPushTokenUsuarioActual = async (usuario) => {
     if (token !== usuario.pushToken) {
       await usuarioUpdate(usuario.id, { pushToken: token });
     }
-    // Siempre publica en vivo (no solo cuando cambió localmente), porque
-    // el registro en PocketBase puede seguir teniendo uno viejo o ninguno
-    // aunque este celular ya lo tuviera guardado de antes.
     const publicado = await publicarPushTokenEnServidor(usuario.nombre, token);
     if (!publicado) {
       return {
@@ -57,6 +52,8 @@ export const registrarPushTokenUsuarioActual = async (usuario) => {
 
 // ─────────────────────────────────────────────────────────────
 // COLA DE REINTENTO (para cuando no hay red al momento de avisar)
+// Cada ítem trae un campo 'tipo' ('push' o 'email') para saber cómo
+// reintentarlo.
 // ─────────────────────────────────────────────────────────────
 
 const leerCola = async () => {
@@ -77,19 +74,11 @@ const guardarCola = async (cola) => {
   }
 };
 
-// Intenta mandar un push a un token específico. Devuelve true si Expo lo
-// aceptó (esto NO garantiza que ya llegó al teléfono, solo que Expo lo
-// recibió para procesarlo - suficiente para saber que había red).
-const intentarEnviar = async (item) => {
+const intentarEnviarPush = async (item) => {
   try {
     const resultado = await sendPushNotification(item.pushToken, item.title, item.body, item.data);
-    if (!resultado) return false; // sin red - reintentar después
+    if (!resultado) return false;
 
-    // Expo responde 200 OK aunque ESE envío puntual haya fallado - el
-    // motivo real viene adentro del cuerpo, no en el código HTTP. Sin
-    // revisar esto, un token vencido/inválido ("DeviceNotRegistered") o
-    // cualquier otro error de Expo se contaba como "enviado con éxito"
-    // sin serlo de verdad.
     const status = resultado?.data?.status;
     if (status === 'error') {
       console.error(
@@ -105,16 +94,25 @@ const intentarEnviar = async (item) => {
   }
 };
 
-// Agrega un ítem a la cola de pendientes (para reintentar más tarde)
+const intentarEnviarEmail = async (item) => {
+  const resultado = await enviarEmail(item.email, item.asunto, item.cuerpoHtml);
+  if (!resultado.ok) {
+    console.error(`No se pudo mandar email a ${item.email}:`, resultado.motivo);
+  }
+  return resultado.ok;
+};
+
+const intentarEnviar = async (item) => {
+  if (item.tipo === 'email') return intentarEnviarEmail(item);
+  return intentarEnviarPush(item);
+};
+
 const agregarAColaPendiente = async (item) => {
   const cola = await leerCola();
   cola.push({ ...item, id: item.id || `${Date.now()}_${Math.random()}` });
   await guardarCola(cola);
 };
 
-// Intenta vaciar la cola de pendientes - se llama al abrir la app y cada
-// vez que vuelve a primer plano. Los que sigan fallando se quedan en la
-// cola para el próximo intento; mientras la app esté abierta.
 export const procesarColaPendiente = async () => {
   const cola = await leerCola();
   if (cola.length === 0) return;
@@ -133,28 +131,44 @@ export const procesarColaPendiente = async () => {
   }
 };
 
-// Envía a una lista de tokens; el que falle se guarda en la cola (no toda
-// la tanda - solo los destinatarios que de verdad no se pudieron alcanzar)
-const enviarATokens = async (tokens, title, body, data) => {
-  for (const pushToken of tokens) {
-    const item = { pushToken, title, body, data };
-    const ok = await intentarEnviar(item);
-    if (!ok) await agregarAColaPendiente(item);
+// Manda a cada admin su push (si tiene token) Y su email (si tiene
+// correo) - de forma independiente, un tipo de aviso no bloquea al otro.
+const enviarAAdmins = async (destinatarios, pushPayload, emailPayload) => {
+  for (const admin of destinatarios) {
+    if (admin.pushToken) {
+      const item = { tipo: 'push', pushToken: admin.pushToken, ...pushPayload };
+      const ok = await intentarEnviarPush(item);
+      if (!ok) await agregarAColaPendiente(item);
+    }
+    if (admin.email) {
+      const item = { tipo: 'email', email: admin.email, ...emailPayload };
+      const ok = await intentarEnviarEmail(item);
+      if (!ok) await agregarAColaPendiente(item);
+    }
   }
 };
 
-const obtenerTokensAdmins = async () => {
-  // Intenta primero en vivo directo de PocketBase (siempre actualizado,
-  // no depende de que alguien haya hecho un ciclo completo de sincronía).
-  // Si no hay red o falla, cae a la copia local como mejor esfuerzo.
-  const enVivo = await obtenerTokensAdminsEnVivo();
+const obtenerDestinatariosAdmins = async () => {
+  const enVivo = await obtenerDestinatariosAdminsEnVivo();
   if (enVivo !== null) return enVivo;
 
   const usuarios = await usuariosList();
   return usuarios
-    .filter((u) => u.tipo === 'admin' && u.pushToken)
-    .map((u) => u.pushToken);
+    .filter((u) => u.tipo === 'admin' && (u.pushToken || u.email))
+    .map((u) => ({ pushToken: u.pushToken || null, email: u.email || null }));
 };
+
+const plantillaEmail = (titulo, contenidoHtml) => `
+  <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+    <div style="background: #6B21A8; color: white; padding: 16px 20px; border-radius: 8px 8px 0 0;">
+      <h2 style="margin: 0;">${titulo}</h2>
+    </div>
+    <div style="padding: 20px; border: 1px solid #E5E7EB; border-top: none; border-radius: 0 0 8px 8px;">
+      ${contenidoHtml}
+      <p style="color: #9CA3AF; font-size: 12px; margin-top: 24px;">FarmaRincón - aviso automático</p>
+    </div>
+  </div>
+`;
 
 // ─────────────────────────────────────────────────────────────
 // 1. NUEVO PEDIDO (inmediato)
@@ -162,19 +176,31 @@ const obtenerTokensAdmins = async () => {
 
 export const notificarNuevoPedido = async (pedido) => {
   try {
-    const tokens = await obtenerTokensAdmins();
-    if (tokens.length === 0) return;
+    const destinatarios = await obtenerDestinatariosAdmins();
+    if (destinatarios.length === 0) return;
 
-    const items = (pedido.medicamentosSolicitados || [])
+    const itemsCortos = (pedido.medicamentosSolicitados || [])
       .map((m) => `${m.nombre}${m.cantidad ? ` x${m.cantidad}` : ''}`)
       .join(', ');
+    const pushBody = `${pedido.nombreSolicitante} pide: ${itemsCortos}`;
 
-    const body = `${pedido.nombreSolicitante} pide: ${items}`;
+    const filasItems = (pedido.medicamentosSolicitados || [])
+      .map((m) => `<li>${m.nombre}${m.cantidad ? ` — cantidad: ${m.cantidad}` : ''}</li>`)
+      .join('');
+    const contenidoHtml = `
+      <p><strong>Solicitante:</strong> ${pedido.nombreSolicitante || ''}</p>
+      ${pedido.lugarResidencia ? `<p><strong>Lugar:</strong> ${pedido.lugarResidencia}</p>` : ''}
+      ${pedido.telefonoContacto ? `<p><strong>Teléfono:</strong> ${pedido.telefonoContacto}</p>` : ''}
+      <p><strong>Medicamentos solicitados:</strong></p>
+      <ul>${filasItems}</ul>
+      ${pedido.notas ? `<p><strong>Notas:</strong> ${pedido.notas}</p>` : ''}
+    `;
 
-    await enviarATokens(tokens, 'Pedido nuevo', body, {
-      tipo: 'pedido',
-      pedidoId: pedido.id,
-    });
+    await enviarAAdmins(
+      destinatarios,
+      { title: 'Pedido nuevo', body: pushBody, data: { tipo: 'pedido', pedidoId: pedido.id } },
+      { asunto: `Pedido nuevo: ${pedido.nombreSolicitante}`, cuerpoHtml: plantillaEmail('📋 Pedido nuevo', contenidoHtml) }
+    );
   } catch (error) {
     console.error('Error notificando nuevo pedido:', error);
   }
@@ -195,18 +221,26 @@ const marcarChequeadoHoy = async () => {
   await AsyncStorage.setItem(CLAVE_ULTIMO_CHEQUEO_DIARIO, hoy);
 };
 
-// Aviso de seguimiento de UNA entrega puntual - reutilizado tanto por el
-// chequeo diario en lote como por el aviso inmediato al activar el switch.
 export const notificarSeguimientoEntrega = async (entrega) => {
   try {
-    const tokens = await obtenerTokensAdmins();
-    if (tokens.length === 0) return;
+    const destinatarios = await obtenerDestinatariosAdmins();
+    if (destinatarios.length === 0) return;
 
-    const body = `Entrega Medicinas a ${entrega.destino} recordar ${entrega.notas || ''}`;
-    await enviarATokens(tokens, 'Seguimiento de entrega', body, {
-      tipo: 'seguimiento',
-      entregaId: entrega.id,
-    });
+    const pushBody = `Entrega Medicinas a ${entrega.destino} recordar ${entrega.notas || ''}`;
+    const contenidoHtml = `
+      <p><strong>Destino:</strong> ${entrega.destino}</p>
+      ${entrega.notas ? `<p><strong>Recordar:</strong> ${entrega.notas}</p>` : ''}
+      <p>Esta entrega sigue marcada para seguimiento diario - revisa si el mensajero ya llegó.</p>
+    `;
+
+    await enviarAAdmins(
+      destinatarios,
+      { title: 'Seguimiento de entrega', body: pushBody, data: { tipo: 'seguimiento', entregaId: entrega.id } },
+      {
+        asunto: `Seguimiento: entrega a ${entrega.destino}`,
+        cuerpoHtml: plantillaEmail('🚚 Seguimiento de entrega', contenidoHtml),
+      }
+    );
   } catch (error) {
     console.error('Error notificando seguimiento de entrega:', error);
   }
@@ -217,15 +251,11 @@ export const ejecutarChequeoDiario = async () => {
   try {
     if (await yaSeChecoHoy()) return resumen;
 
-    const tokens = await obtenerTokensAdmins();
-    resumen.tokensDisponibles = tokens.length;
-    // Igual marcamos el día como chequeado aunque no haya admins con token
-    // todavía - evita que se repita el intento de armar las listas cada
-    // vez que se abra la app el mismo día.
+    const destinatarios = await obtenerDestinatariosAdmins();
+    resumen.tokensDisponibles = destinatarios.length;
     await marcarChequeadoHoy();
-    if (tokens.length === 0) return resumen;
+    if (destinatarios.length === 0) return resumen;
 
-    // ── Vencimientos ──
     const activos = await medicamentosList(true);
     const porVencer = activos.filter((m) => {
       const dias = getDaysUntilExpiry(m.vencimiento);
@@ -233,14 +263,31 @@ export const ejecutarChequeoDiario = async () => {
     });
 
     if (porVencer.length > 0) {
-      const lista = porVencer.map((m) => m.nombre).join(', ');
-      await enviarATokens(tokens, `⚠️ ${porVencer.length} medicamento(s) por vencer`, lista, {
-        tipo: 'vencimientos',
-      });
+      const listaCorta = porVencer.map((m) => m.nombre).join(', ');
+      const filasDetalle = porVencer
+        .map((m) => {
+          const dias = getDaysUntilExpiry(m.vencimiento);
+          return `<li>${m.nombre}${m.presentacion ? ` (${m.presentacion})` : ''} — vence en ${dias} día(s)</li>`;
+        })
+        .join('');
+      await enviarAAdmins(
+        destinatarios,
+        {
+          title: `⚠️ ${porVencer.length} medicamento(s) por vencer`,
+          body: listaCorta,
+          data: { tipo: 'vencimientos' },
+        },
+        {
+          asunto: `⚠️ ${porVencer.length} medicamento(s) por vencer`,
+          cuerpoHtml: plantillaEmail(
+            '⚠️ Medicamentos por vencer',
+            `<p>Estos medicamentos vencen en los próximos ${DIAS_PARA_VENCER} días:</p><ul>${filasDetalle}</ul>`
+          ),
+        }
+      );
       resumen.porVencer = porVencer.map((m) => m.nombre);
     }
 
-    // ── Seguimiento de entregas ──
     const todasEntregas = await entregasList();
     const conSeguimiento = todasEntregas.filter((e) => e.darSeguimiento);
 
@@ -256,11 +303,6 @@ export const ejecutarChequeoDiario = async () => {
   }
 };
 
-// Fuerza el chequeo diario ahora mismo, sin esperar al próximo día -
-// limpia la marca de "ya se chequeó hoy" y vuelve a correrlo. Útil para
-// pruebas, y también para uso real si un admin quiere forzar un chequeo
-// sin esperar. Devuelve un resumen de qué se mandó, para mostrarlo en
-// pantalla.
 export const forzarChequeoDiario = async () => {
   await AsyncStorage.removeItem(CLAVE_ULTIMO_CHEQUEO_DIARIO);
   return await ejecutarChequeoDiario();

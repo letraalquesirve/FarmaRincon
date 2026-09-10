@@ -403,18 +403,25 @@ export const publicarPushTokenEnServidor = async (nombreUsuario, pushToken) => {
 
 // Trae, en vivo, los tokens de todos los admins directo de PocketBase
 // (no de la copia local, que puede estar desactualizada)
-export const obtenerTokensAdminsEnVivo = async () => {
+// Trae, en vivo, token de push y email de todos los admins directo de
+// PocketBase (no de la copia local, que puede estar desactualizada) -
+// una sola consulta para las dos cosas, ya que casi siempre se necesitan
+// juntas al mandar un aviso.
+export const obtenerDestinatariosAdminsEnVivo = async () => {
   try {
     const response = await fetch(
       `${VPS_BASE_URL}/api/collections/usuarios/records?filter=${encodeURIComponent(
         `tipo="admin"`
       )}&perPage=200`
     );
-    if (!response.ok) return null; // null = "no se pudo" (distinto de [] = "sin admins con token")
+    if (!response.ok) return null; // null = "no se pudo" (distinto de [] = "sin admins")
     const data = await response.json();
-    return (data.items || []).filter((u) => u.pushtoken).map((u) => u.pushtoken);
+    return (data.items || []).map((u) => ({
+      pushToken: u.pushtoken || null,
+      email: u.email || null,
+    }));
   } catch (error) {
-    console.error('Error obteniendo tokens de admins en vivo:', error);
+    console.error('Error obteniendo destinatarios de admins en vivo:', error);
     return null;
   }
 };
@@ -425,7 +432,7 @@ export const obtenerTokensAdminsEnVivo = async () => {
 // esperar un ciclo completo de Cargar/Salvar BD. Si ya existe (por
 // nombre), lo actualiza; si no, lo crea. Requiere red - si falla, quien
 // llama debe avisar que el usuario quedó pendiente de subir.
-export const publicarUsuarioEnServidor = async (nombre, tipo) => {
+export const publicarUsuarioEnServidor = async (nombre, tipo, email = '') => {
   try {
     const buscar = await fetch(
       `${VPS_BASE_URL}/api/collections/usuarios/records?filter=${encodeURIComponent(
@@ -442,7 +449,7 @@ export const publicarUsuarioEnServidor = async (nombre, tipo) => {
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tipo }),
+          body: JSON.stringify({ tipo, email }),
         }
       );
       return actualizar.ok;
@@ -451,7 +458,7 @@ export const publicarUsuarioEnServidor = async (nombre, tipo) => {
     const crear = await fetch(`${VPS_BASE_URL}/api/collections/usuarios/records`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, tipo }),
+      body: JSON.stringify({ nombre, tipo, email }),
     });
     return crear.ok;
   } catch (error) {
