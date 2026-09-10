@@ -83,10 +83,23 @@ const guardarCola = async (cola) => {
 const intentarEnviar = async (item) => {
   try {
     const resultado = await sendPushNotification(item.pushToken, item.title, item.body, item.data);
-    // Un fetch que sí completó (con o sin red real) devuelve un objeto;
-    // si de verdad no hubo red, sendPushNotification captura la excepción
-    // y devuelve null - eso es lo que tratamos como "reintentar después".
-    return !!resultado;
+    if (!resultado) return false; // sin red - reintentar después
+
+    // Expo responde 200 OK aunque ESE envío puntual haya fallado - el
+    // motivo real viene adentro del cuerpo, no en el código HTTP. Sin
+    // revisar esto, un token vencido/inválido ("DeviceNotRegistered") o
+    // cualquier otro error de Expo se contaba como "enviado con éxito"
+    // sin serlo de verdad.
+    const status = resultado?.data?.status;
+    if (status === 'error') {
+      console.error(
+        `Expo rechazó el envío a ${item.pushToken}:`,
+        resultado.data.message,
+        resultado.data.details
+      );
+      return false;
+    }
+    return true;
   } catch (error) {
     return false;
   }
