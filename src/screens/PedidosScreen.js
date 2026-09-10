@@ -109,10 +109,11 @@ export default function PedidosScreen({ user }) {
     else setLoading(true);
 
     try {
-      const [todosPedidos, todasEntregas, medicamentosActivos] = await Promise.all([
+      const [todosPedidos, todasEntregas, medicamentosParaPedir] = await Promise.all([
         pedidosList(),
         entregasList(),
-        medicamentosList(true),
+        medicamentosList(), // todos: activos e inactivos - un pedido es solo para
+        // registrar qué se necesita, no depende de si hay existencia ahora mismo
       ]);
       const pedidosOrdenados = [...todosPedidos].sort(
         (a, b) => new Date(b.fechaPedido || 0) - new Date(a.fechaPedido || 0)
@@ -120,7 +121,7 @@ export default function PedidosScreen({ user }) {
       const entregasOrdenadas = [...todasEntregas].sort(
         (a, b) => new Date(b.fechaCreacion || 0) - new Date(a.fechaCreacion || 0)
       );
-      const medicamentosOrdenados = [...medicamentosActivos].sort((a, b) =>
+      const medicamentosOrdenados = [...medicamentosParaPedir].sort((a, b) =>
         (a.nombre || '').localeCompare(b.nombre || '')
       );
       setPedidos(pedidosOrdenados);
@@ -174,6 +175,9 @@ export default function PedidosScreen({ user }) {
     setCantidades((prev) => ({ ...prev, [medicamentoId]: texto }));
   };
 
+  // Un pedido es solo para registrar qué se necesita - no depende del
+  // stock actual (puede no haber nada ahora mismo y resolverse después
+  // cuando entre esa medicina). Por eso no se valida contra cantidad.cantidad.
   const agregarASeleccion = (medicamento) => {
     const cantidad = parseInt(cantidades[medicamento.id]);
     if (!cantidad || cantidad <= 0) {
@@ -182,10 +186,6 @@ export default function PedidosScreen({ user }) {
     }
     if (seleccionTemporal.find((s) => s.medicamentoId === medicamento.id)) {
       Alert.alert('Error', 'Este medicamento ya está en la lista.');
-      return;
-    }
-    if (cantidad > medicamento.cantidad) {
-      Alert.alert('Error', `Stock insuficiente. Disponible: ${medicamento.cantidad} unidades`);
       return;
     }
 
@@ -829,7 +829,6 @@ export default function PedidosScreen({ user }) {
                   <Text style={styles.medicamentoPresentacionSeleccion} numberOfLines={1}>
                     {item.presentacion}
                   </Text>
-                  <Text style={styles.medicamentoStockSeleccion}>Stock: {item.cantidad} uds</Text>
                   {item.ubicacion && (
                     <Text style={styles.medicamentoUbicacionSeleccion} numberOfLines={1}>
                       📍 {item.ubicacion}
