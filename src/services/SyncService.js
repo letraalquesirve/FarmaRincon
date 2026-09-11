@@ -499,10 +499,12 @@ export const eliminarUsuarioEnServidor = async (nombre) => {
 // permisos se sienta casi inmediato en todos los celulares).
 //
 // IMPORTANTE: requiere una colección nueva en PocketBase llamada
-// 'configuracion', con UN campo de texto 'modulosUser' (texto plano,
-// separado por comas, ej: 'Inventario,Pedidos'). Solo debe existir UN
-// registro en esa colección - si no existe ninguno, se crea el primero
-// al guardar por primera vez desde la app.
+// 'configuracion', con UN campo de texto 'modulosuser' TODO EN
+// MINÚSCULAS (para coincidir con el resto del esquema de PocketBase,
+// que es todo en minúsculas puras - igual que 'pushtoken'). Texto
+// plano, separado por comas, ej: 'Inventario,Pedidos'. Solo debe
+// existir UN registro en esa colección - si no existe ninguno, se crea
+// el primero al guardar por primera vez desde la app.
 // ─────────────────────────────────────────────────────────────
 
 // Trae, en vivo, la lista de módulos permitidos para el rol "user".
@@ -518,7 +520,7 @@ export const obtenerModulosPermitidosUserEnVivo = async () => {
     const data = await response.json();
     const registro = (data.items || [])[0];
     if (!registro) return null; // nunca se ha configurado nada todavía
-    const texto = (registro.modulosUser || '').trim();
+    const texto = (registro.modulosuser || '').trim();
     return texto ? texto.split(',').map((m) => m.trim()) : [];
   } catch (error) {
     console.error('Error obteniendo módulos permitidos en vivo:', error);
@@ -544,7 +546,7 @@ export const publicarModulosPermitidosUser = async (modulos) => {
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ modulosUser: texto }),
+          body: JSON.stringify({ modulosuser: texto }),
         }
       );
       return actualizar.ok;
@@ -553,7 +555,7 @@ export const publicarModulosPermitidosUser = async (modulos) => {
     const crear = await fetch(`${VPS_BASE_URL}/api/collections/configuracion/records`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modulosUser: texto }),
+      body: JSON.stringify({ modulosuser: texto }),
     });
     return crear.ok;
   } catch (error) {
