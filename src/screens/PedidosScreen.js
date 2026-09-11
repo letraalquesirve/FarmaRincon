@@ -30,6 +30,7 @@ import {
   ChevronUp,
   ClipboardList,
   Trash2,
+  Pencil,
   Pill,
   MinusCircle,
   User,
@@ -73,6 +74,7 @@ export default function PedidosScreen({ user }) {
     notas: '',
     medicamentosSolicitados: [],
   });
+  const [editandoPedido, setEditandoPedido] = useState(null); // null = crear, objeto = editar
   const [showMedicamentoModal, setShowMedicamentoModal] = useState(false);
   const [busqueda, setBusqueda] = useState('');
   const [medicamentosFiltrados, setMedicamentosFiltrados] = useState([]);
@@ -230,6 +232,32 @@ export default function PedidosScreen({ user }) {
     setFormData({ ...formData, medicamentosSolicitados: nuevosMedicamentos });
   };
 
+  // Abre el formulario ya lleno con los datos de un pedido pendiente,
+  // para editarlo en vez de crear uno nuevo
+  const abrirEditarPedido = (pedido) => {
+    setEditandoPedido(pedido);
+    setFormData({
+      nombreSolicitante: pedido.nombreSolicitante || '',
+      lugarResidencia: pedido.lugarResidencia || '',
+      telefonoContacto: pedido.telefonoContacto || '',
+      notas: pedido.notas || '',
+      medicamentosSolicitados: pedido.medicamentosSolicitados || [],
+    });
+    setShowForm(true);
+  };
+
+  const cerrarFormPedido = () => {
+    setShowForm(false);
+    setEditandoPedido(null);
+    setFormData({
+      nombreSolicitante: '',
+      lugarResidencia: '',
+      telefonoContacto: '',
+      notas: '',
+      medicamentosSolicitados: [],
+    });
+  };
+
   const handleCreatePedido = async () => {
     if (isSubmitting) return;
     if (!formData.nombreSolicitante) {
@@ -248,40 +276,49 @@ export default function PedidosScreen({ user }) {
       return medLimpio;
     });
 
-    const pedidoData = {
-      nombreSolicitante: formData.nombreSolicitante.trim(),
-      lugarResidencia: formData.lugarResidencia.trim() || '',
-      telefonoContacto: formData.telefonoContacto.trim() || '',
-      notas: formData.notas.trim() || '',
-      medicamentosSolicitados: medicamentosLimpios,
-      atendido: false,
-      entregasRealizadas: [],
-      fechaPedido: new Date().toISOString(),
-      fechaAtencion: null,
-      creadoPor: getUserName(),
-      atendidoPor: '',
-    };
-
     try {
+      if (editandoPedido) {
+        // Editar un pedido pendiente existente - no dispara ninguna
+        // notificación (esas son solo para pedidos nuevos)
+        await pedidoUpdate(editandoPedido.id, {
+          nombreSolicitante: formData.nombreSolicitante.trim(),
+          lugarResidencia: formData.lugarResidencia.trim() || '',
+          telefonoContacto: formData.telefonoContacto.trim() || '',
+          notas: formData.notas.trim() || '',
+          medicamentosSolicitados: medicamentosLimpios,
+        });
+        cerrarFormPedido();
+        Alert.alert('Éxito', 'Pedido actualizado correctamente');
+        await loadData();
+        return;
+      }
+
+      const pedidoData = {
+        nombreSolicitante: formData.nombreSolicitante.trim(),
+        lugarResidencia: formData.lugarResidencia.trim() || '',
+        telefonoContacto: formData.telefonoContacto.trim() || '',
+        notas: formData.notas.trim() || '',
+        medicamentosSolicitados: medicamentosLimpios,
+        atendido: false,
+        entregasRealizadas: [],
+        fechaPedido: new Date().toISOString(),
+        fechaAtencion: null,
+        creadoPor: getUserName(),
+        atendidoPor: '',
+      };
+
       const pedidoCreado = await pedidoCreate(pedidoData);
       await sendLocalNotification(
         '📋 Nuevo Pedido',
         `${formData.nombreSolicitante} ha solicitado ${formData.medicamentosSolicitados.length} medicamento(s)`
       );
       notificarNuevoPedido(pedidoCreado); // aviso push a admins, sin bloquear el flujo si falla
-      setFormData({
-        nombreSolicitante: '',
-        lugarResidencia: '',
-        telefonoContacto: '',
-        notas: '',
-        medicamentosSolicitados: [],
-      });
-      setShowForm(false);
+      cerrarFormPedido();
       Alert.alert('Éxito', 'Pedido registrado correctamente');
       await loadData();
     } catch (error) {
       console.error('❌ Error:', error);
-      Alert.alert('Error', `No se pudo crear el pedido: ${error.message}`);
+      Alert.alert('Error', `No se pudo ${editandoPedido ? 'actualizar' : 'crear'} el pedido: ${error.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -560,6 +597,11 @@ export default function PedidosScreen({ user }) {
                   </View>
                 </View>
                 <View style={styles.pedidoHeaderRight}>
+                  {!pedido.atendido && (
+                    <TouchableOpacity onPress={() => abrirEditarPedido(pedido)}>
+                      <Pencil color="#7C3AED" size={20} />
+                    </TouchableOpacity>
+                  )}
                   {isUserAdmin && (
                     <TouchableOpacity
                       onPress={() => eliminarPedido(pedido.id, pedido.nombreSolicitante)}
@@ -667,7 +709,7 @@ export default function PedidosScreen({ user }) {
         visible={showForm}
         animationType="slide"
         transparent={true}
-        onRequestClose={() => setShowForm(false)}
+        onRequestClose={cerrarFormPedido}
       >
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
@@ -680,8 +722,8 @@ export default function PedidosScreen({ user }) {
               keyboardShouldPersistTaps="handled"
             >
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Nuevo Pedido</Text>
-                <TouchableOpacity onPress={() => setShowForm(false)}>
+                <Text style={styles.modalTitle}>{editandoPedido ? 'Editar Pedido' : 'Nuevo Pedido'}</Text>
+                <TouchableOpacity onPress={cerrarFormPedido}>
                   <XCircle size={24} color="#6B7280" />
                 </TouchableOpacity>
               </View>
@@ -756,7 +798,9 @@ export default function PedidosScreen({ user }) {
                   {isSubmitting ? (
                     <ActivityIndicator color="white" size="small" />
                   ) : (
-                    <Text style={styles.saveButtonText}>Crear Pedido</Text>
+                    <Text style={styles.saveButtonText}>
+                      {editandoPedido ? 'Guardar Cambios' : 'Crear Pedido'}
+                    </Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -823,9 +867,7 @@ export default function PedidosScreen({ user }) {
                   </View>
                 )}
                 <View style={styles.medicamentoInfoSeleccion}>
-                  <Text style={styles.medicamentoNombreSeleccion} numberOfLines={2}>
-                    {item.nombre}
-                  </Text>
+                  <Text style={styles.medicamentoNombreSeleccion}>{item.nombre}</Text>
                   <Text style={styles.medicamentoPresentacionSeleccion} numberOfLines={1}>
                     {item.presentacion}
                   </Text>
