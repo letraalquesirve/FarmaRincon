@@ -49,7 +49,7 @@ import {
 } from '../services/AdminNotificationService';
 import UsuariosScreen from './UsuariosScreen';
 
-export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
+export default function HomeScreen({ onOpenApiKeyModal, user, onLogout, puedeRegistrar }) {
   const navigation = useNavigation();
   const isUserAdmin = user?.tipo === 'admin';
 
@@ -562,7 +562,7 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
               <Send color="white" size={18} />
             </TouchableOpacity>
           )}
-          {isUserAdmin && (
+          {(isUserAdmin || puedeRegistrar) && (
             <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>
               <Key color="white" size={20} />
             </TouchableOpacity>

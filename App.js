@@ -85,7 +85,13 @@ function AppNavigator({ user, isUserAdmin, modulosPermitidosUser, onOpenApiKeyMo
         }}
       >
         {(props) => (
-          <HomeScreen {...props} user={user} onOpenApiKeyModal={onOpenApiKeyModal} onLogout={onLogout} />
+          <HomeScreen
+            {...props}
+            user={user}
+            onOpenApiKeyModal={onOpenApiKeyModal}
+            onLogout={onLogout}
+            puedeRegistrar={moduloVisible('Registrar')}
+          />
         )}
       </Tab.Screen>
 
