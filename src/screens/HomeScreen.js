@@ -533,9 +533,11 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
       >
       <View style={styles.header}>
         <View style={styles.headerRow}>
-          <TouchableOpacity onPress={handleShowBackupInfo}>
-            <Package color="white" size={28} />
-          </TouchableOpacity>
+          {isUserAdmin && (
+            <TouchableOpacity onPress={handleShowBackupInfo}>
+              <Package color="white" size={28} />
+            </TouchableOpacity>
+          )}
           <Text style={styles.headerTitle}>Configuración</Text>
           {isUserAdmin && (
             <TouchableOpacity style={styles.apiKeyButton} onPress={() => setShowUsuariosModal(true)}>
@@ -555,12 +557,16 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
               <Bell color="white" size={20} />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.apiKeyButton} onPress={handleProbarNotificaciones}>
-            <Send color="white" size={18} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>
-            <Key color="white" size={20} />
-          </TouchableOpacity>
+          {isUserAdmin && (
+            <TouchableOpacity style={styles.apiKeyButton} onPress={handleProbarNotificaciones}>
+              <Send color="white" size={18} />
+            </TouchableOpacity>
+          )}
+          {isUserAdmin && (
+            <TouchableOpacity style={styles.apiKeyButton} onPress={onOpenApiKeyModal}>
+              <Key color="white" size={20} />
+            </TouchableOpacity>
+          )}
         </View>
         <TouchableOpacity style={styles.userBadge} onPress={handleUserPress}>
           <Text style={styles.userName}>👤 {user?.nombre || 'Usuario'}</Text>
@@ -631,6 +637,8 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
         </TouchableOpacity>
       </View>
 
+      {isUserAdmin && (
+        <>
       <View style={styles.statsGrid}>
         <TouchableOpacity
           style={styles.statCard}
@@ -805,6 +813,8 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout }) {
             </TouchableOpacity>
           )}
         </View>
+      )}
+        </>
       )}
     </ScrollView>
 

@@ -11,7 +11,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { Users, Plus, Shield, User as UserIcon, Trash2, X, Check } from 'lucide-react-native';
+import { Users, Plus, Shield, User as UserIcon, Trash2, X, Check, Grid, CheckSquare, Square } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   usuariosList,
@@ -23,7 +23,11 @@ import {
 import {
   publicarUsuarioEnServidor,
   eliminarUsuarioEnServidor,
+  obtenerModulosPermitidosUserEnVivo,
+  publicarModulosPermitidosUser,
 } from '../services/SyncService';
+
+const TODOS_LOS_MODULOS = ['Inventario', 'Registrar', 'Pedidos', 'Entregas', 'Historial'];
 
 export default function UsuariosScreen({ visible, onClose, user: usuarioActual }) {
   const insets = useSafeAreaInsets();
@@ -35,6 +39,10 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
   const [tipoForm, setTipoForm] = useState('user');
   const [emailForm, setEmailForm] = useState('');
   const [guardando, setGuardando] = useState(false);
+  const [modalModulosVisible, setModalModulosVisible] = useState(false);
+  const [modulosSeleccionados, setModulosSeleccionados] = useState([]);
+  const [cargandoModulos, setCargandoModulos] = useState(false);
+  const [guardandoModulos, setGuardandoModulos] = useState(false);
 
   const cargarUsuarios = useCallback(async () => {
     try {
@@ -54,6 +62,48 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
       cargarUsuarios();
     }
   }, [visible, cargarUsuarios]);
+
+  // Módulos visibles para el rol "user" - una sola configuración
+  // compartida (no por usuario individual), en vivo directo de
+  // PocketBase. Por defecto (nunca configurado) arranca con Inventario/
+  // Pedidos/Historial marcados, que es el comportamiento de siempre.
+  const abrirConfigModulos = async () => {
+    setModalModulosVisible(true);
+    setCargandoModulos(true);
+    try {
+      const enVivo = await obtenerModulosPermitidosUserEnVivo();
+      setModulosSeleccionados(enVivo !== null ? enVivo : ['Inventario', 'Pedidos', 'Historial']);
+    } catch (error) {
+      console.error('Error cargando módulos permitidos:', error);
+      Alert.alert('Error', 'No se pudo consultar la configuración actual (revisa tu conexión)');
+    } finally {
+      setCargandoModulos(false);
+    }
+  };
+
+  const toggleModulo = (modulo) => {
+    setModulosSeleccionados((prev) =>
+      prev.includes(modulo) ? prev.filter((m) => m !== modulo) : [...prev, modulo]
+    );
+  };
+
+  const guardarModulos = async () => {
+    setGuardandoModulos(true);
+    try {
+      const ok = await publicarModulosPermitidosUser(modulosSeleccionados);
+      if (ok) {
+        setModalModulosVisible(false);
+        Alert.alert('Éxito', 'Configuración guardada. Los usuarios la verán la próxima vez que abran la app.');
+      } else {
+        Alert.alert('Error', 'No se pudo guardar (revisa tu conexión) - inténtalo de nuevo');
+      }
+    } catch (error) {
+      console.error('Error guardando módulos permitidos:', error);
+      Alert.alert('Error', 'No se pudo guardar la configuración');
+    } finally {
+      setGuardandoModulos(false);
+    }
+  };
 
   const abrirCrear = () => {
     setEditando(null);
@@ -193,6 +243,13 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
           </Text>
         </View>
 
+        <TouchableOpacity style={styles.configModulosButton} onPress={abrirConfigModulos}>
+          <Grid color="#7C3AED" size={18} />
+          <Text style={styles.configModulosButtonText}>
+            Configurar módulos visibles para usuarios (no admin)
+          </Text>
+        </TouchableOpacity>
+
         {loading ? (
           <ActivityIndicator size="large" color="#7C3AED" style={{ marginTop: 40 }} />
         ) : (
@@ -289,6 +346,61 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
             </View>
           </View>
         </Modal>
+
+        <Modal visible={modalModulosVisible} animationType="slide" transparent>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Módulos para usuarios</Text>
+                <TouchableOpacity onPress={() => setModalModulosVisible(false)}>
+                  <X color="#6B7280" size={24} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.hintModulos}>
+                Marca los módulos que podrán ver los usuarios con rol "Usuario" (los
+                administradores siempre ven todo). "Inicio" siempre es visible, no hace falta
+                marcarlo.
+              </Text>
+
+              {cargandoModulos ? (
+                <ActivityIndicator size="large" color="#7C3AED" style={{ marginVertical: 20 }} />
+              ) : (
+                <>
+                  {TODOS_LOS_MODULOS.map((modulo) => (
+                    <TouchableOpacity
+                      key={modulo}
+                      style={styles.moduloRow}
+                      onPress={() => toggleModulo(modulo)}
+                    >
+                      {modulosSeleccionados.includes(modulo) ? (
+                        <CheckSquare color="#7C3AED" size={22} />
+                      ) : (
+                        <Square color="#9CA3AF" size={22} />
+                      )}
+                      <Text style={styles.moduloRowText}>{modulo}</Text>
+                    </TouchableOpacity>
+                  ))}
+
+                  <TouchableOpacity
+                    style={styles.saveButton}
+                    onPress={guardarModulos}
+                    disabled={guardandoModulos}
+                  >
+                    {guardandoModulos ? (
+                      <ActivityIndicator color="white" size="small" />
+                    ) : (
+                      <>
+                        <Check color="white" size={20} />
+                        <Text style={styles.saveButtonText}>Guardar configuración</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
       </View>
     </Modal>
   );
@@ -315,6 +427,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   avisoInternetText: { fontSize: 12, color: '#92400E' },
+  configModulosButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F5F3FF',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  configModulosButtonText: { fontSize: 12, fontWeight: '600', color: '#7C3AED', flexShrink: 1 },
+  hintModulos: { fontSize: 12, color: '#6B7280', marginBottom: 16 },
+  moduloRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  moduloRowText: { fontSize: 15, color: '#1F2937' },
   card: {
     flexDirection: 'row',
     alignItems: 'center',

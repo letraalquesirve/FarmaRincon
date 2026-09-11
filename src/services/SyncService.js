@@ -491,3 +491,73 @@ export const eliminarUsuarioEnServidor = async (nombre) => {
     return false;
   }
 };
+
+// ─────────────────────────────────────────────────────────────
+// MÓDULOS VISIBLES PARA EL ROL "user" - configuración única y
+// compartida (no por usuario individual), directo de PocketBase, sin
+// pasar por el candado pesado de la BD completa (para que un cambio de
+// permisos se sienta casi inmediato en todos los celulares).
+//
+// IMPORTANTE: requiere una colección nueva en PocketBase llamada
+// 'configuracion', con UN campo de texto 'modulosUser' (texto plano,
+// separado por comas, ej: 'Inventario,Pedidos'). Solo debe existir UN
+// registro en esa colección - si no existe ninguno, se crea el primero
+// al guardar por primera vez desde la app.
+// ─────────────────────────────────────────────────────────────
+
+// Trae, en vivo, la lista de módulos permitidos para el rol "user".
+// Devuelve un array de nombres, o null si no se pudo consultar (sin
+// red) - null es distinto de [] (que significa "configurado, pero sin
+// ningún módulo permitido").
+export const obtenerModulosPermitidosUserEnVivo = async () => {
+  try {
+    const response = await fetch(
+      `${VPS_BASE_URL}/api/collections/configuracion/records?perPage=1`
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    const registro = (data.items || [])[0];
+    if (!registro) return null; // nunca se ha configurado nada todavía
+    const texto = (registro.modulosUser || '').trim();
+    return texto ? texto.split(',').map((m) => m.trim()) : [];
+  } catch (error) {
+    console.error('Error obteniendo módulos permitidos en vivo:', error);
+    return null;
+  }
+};
+
+// Publica la lista de módulos permitidos para el rol "user" - crea el
+// registro único si todavía no existe, o lo actualiza si ya existe.
+export const publicarModulosPermitidosUser = async (modulos) => {
+  try {
+    const texto = (modulos || []).join(',');
+    const buscar = await fetch(
+      `${VPS_BASE_URL}/api/collections/configuracion/records?perPage=1`
+    );
+    if (!buscar.ok) return false;
+    const data = await buscar.json();
+    const existente = (data.items || [])[0];
+
+    if (existente) {
+      const actualizar = await fetch(
+        `${VPS_BASE_URL}/api/collections/configuracion/records/${existente.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modulosUser: texto }),
+        }
+      );
+      return actualizar.ok;
+    }
+
+    const crear = await fetch(`${VPS_BASE_URL}/api/collections/configuracion/records`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modulosUser: texto }),
+    });
+    return crear.ok;
+  } catch (error) {
+    console.error('Error publicando módulos permitidos:', error);
+    return false;
+  }
+};

@@ -16,6 +16,7 @@ import {
   procesarColaPendiente,
   ejecutarChequeoDiario,
 } from './src/services/AdminNotificationService';
+import { obtenerModulosPermitidosUserEnVivo } from './src/services/SyncService';
 
 // Importar screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -31,11 +32,24 @@ LogBox.ignoreLogs(['Setting a timer for a long period of time']);
 
 const Tab = createBottomTabNavigator();
 
+// Si nunca se ha configurado nada desde Usuarios (o no hay red para
+// consultarlo y tampoco hay nada guardado de antes), este es el
+// comportamiento de siempre - para que nadie pierda acceso de golpe
+// solo por instalar esta actualización sin haber tocado la
+// configuración nueva.
+const MODULOS_POR_DEFECTO_USER = ['Inventario', 'Pedidos', 'Historial'];
+
 // Envuelto en un componente aparte porque useSafeAreaInsets() necesita estar
 // DENTRO de <SafeAreaProvider> para funcionar - no se puede llamar en el
 // mismo componente que lo declara.
-function AppNavigator({ user, isUserAdmin, onOpenApiKeyModal, onLogout }) {
+function AppNavigator({ user, isUserAdmin, modulosPermitidosUser, onOpenApiKeyModal, onLogout }) {
   const insets = useSafeAreaInsets();
+
+  const moduloVisible = (nombreModulo) => {
+    if (isUserAdmin) return true;
+    const lista = modulosPermitidosUser !== null ? modulosPermitidosUser : MODULOS_POR_DEFECTO_USER;
+    return lista.includes(nombreModulo);
+  };
 
   return (
     <Tab.Navigator
@@ -75,18 +89,20 @@ function AppNavigator({ user, isUserAdmin, onOpenApiKeyModal, onLogout }) {
         )}
       </Tab.Screen>
 
-      <Tab.Screen
-        name="Inventario"
-        options={{
-          title: 'Inventario',
-          tabBarIcon: ({ color, size }) => <Package color={color} size={size} />,
-          unmountOnBlur: true,
-        }}
-      >
-        {(props) => <InventoryScreen {...props} user={user} />}
-      </Tab.Screen>
+      {moduloVisible('Inventario') && (
+        <Tab.Screen
+          name="Inventario"
+          options={{
+            title: 'Inventario',
+            tabBarIcon: ({ color, size }) => <Package color={color} size={size} />,
+            unmountOnBlur: true,
+          }}
+        >
+          {(props) => <InventoryScreen {...props} user={user} />}
+        </Tab.Screen>
+      )}
 
-      {isUserAdmin && (
+      {moduloVisible('Registrar') && (
         <Tab.Screen
           name="Registrar"
           options={{
@@ -98,7 +114,7 @@ function AppNavigator({ user, isUserAdmin, onOpenApiKeyModal, onLogout }) {
         </Tab.Screen>
       )}
 
-      {isUserAdmin && (
+      {moduloVisible('Entregas') && (
         <Tab.Screen
           name="Entregas"
           options={{
@@ -110,25 +126,29 @@ function AppNavigator({ user, isUserAdmin, onOpenApiKeyModal, onLogout }) {
         </Tab.Screen>
       )}
 
-      <Tab.Screen
-        name="Pedidos"
-        options={{
-          title: 'Pedidos',
-          tabBarIcon: ({ color, size }) => <ClipboardList color={color} size={size} />,
-        }}
-      >
-        {(props) => <PedidosScreen {...props} user={user} />}
-      </Tab.Screen>
+      {moduloVisible('Pedidos') && (
+        <Tab.Screen
+          name="Pedidos"
+          options={{
+            title: 'Pedidos',
+            tabBarIcon: ({ color, size }) => <ClipboardList color={color} size={size} />,
+          }}
+        >
+          {(props) => <PedidosScreen {...props} user={user} />}
+        </Tab.Screen>
+      )}
 
-      <Tab.Screen
-        name="Historial"
-        options={{
-          title: 'Historial',
-          tabBarIcon: ({ color, size }) => <History color={color} size={size} />,
-        }}
-      >
-        {(props) => <HistoryScreen {...props} user={user} />}
-      </Tab.Screen>
+      {moduloVisible('Historial') && (
+        <Tab.Screen
+          name="Historial"
+          options={{
+            title: 'Historial',
+            tabBarIcon: ({ color, size }) => <History color={color} size={size} />,
+          }}
+        >
+          {(props) => <HistoryScreen {...props} user={user} />}
+        </Tab.Screen>
+      )}
     </Tab.Navigator>
   );
 }
@@ -139,6 +159,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [modulosPermitidosUser, setModulosPermitidosUser] = useState(null);
 
   // ── Cargar usuario guardado al iniciar ──
   useEffect(() => {
@@ -185,6 +206,33 @@ export default function App() {
     });
 
     return () => subscription.remove();
+  }, [isLoggedIn, user]);
+
+  // ── Módulos visibles para el rol "user": en vivo, directo de
+  // PocketBase (no espera el ciclo de Cargar/Salvar BD), con una copia
+  // en caché local por si no hay red en ese momento - así un "user" sin
+  // conexión sigue viendo lo último que sí se pudo consultar, en vez de
+  // quedarse sin nada.
+  useEffect(() => {
+    if (!isLoggedIn || !user || user.tipo === 'admin') return;
+
+    const cargarModulosPermitidos = async () => {
+      const enVivo = await obtenerModulosPermitidosUserEnVivo();
+      if (enVivo !== null) {
+        setModulosPermitidosUser(enVivo);
+        await AsyncStorage.setItem('modulosPermitidosUserCache', JSON.stringify(enVivo));
+        return;
+      }
+      // Sin red - usar la última copia conocida, si existe
+      try {
+        const cache = await AsyncStorage.getItem('modulosPermitidosUserCache');
+        if (cache) setModulosPermitidosUser(JSON.parse(cache));
+      } catch (error) {
+        console.error('Error leyendo caché de módulos permitidos:', error);
+      }
+    };
+
+    cargarModulosPermitidos();
   }, [isLoggedIn, user]);
 
   const checkApiKey = async () => {
@@ -273,6 +321,7 @@ export default function App() {
             <AppNavigator
               user={user}
               isUserAdmin={isUserAdmin}
+              modulosPermitidosUser={modulosPermitidosUser}
               onOpenApiKeyModal={() => setShowApiKeyModal(true)}
               onLogout={handleLogout}
             />
