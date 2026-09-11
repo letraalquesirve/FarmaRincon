@@ -54,6 +54,7 @@ export const initDatabase = async () => {
       fechaAtencion TEXT,
       creadoPor TEXT,
       atendidoPor TEXT,
+      esAuto INTEGER DEFAULT 0,
       updated TEXT,
       _syncStatus TEXT DEFAULT 'synced',
       _pendingOp TEXT
@@ -70,6 +71,7 @@ export const initDatabase = async () => {
       pedidoId TEXT,
       notas TEXT,
       darSeguimiento INTEGER DEFAULT 0,
+      esAuto INTEGER DEFAULT 0,
       ultimaModificacion TEXT,
       updated TEXT,
       _syncStatus TEXT DEFAULT 'synced',
@@ -158,6 +160,8 @@ const ejecutarMigraciones = async (dbInstance) => {
   await ensureColumn(dbInstance, 'usuarios', 'email', 'TEXT');
   // entregas: seguimiento diario de mensajero
   await ensureColumn(dbInstance, 'entregas', 'darSeguimiento', 'INTEGER DEFAULT 0');
+  await ensureColumn(dbInstance, 'entregas', 'esAuto', 'INTEGER DEFAULT 0');
+  await ensureColumn(dbInstance, 'pedidos', 'esAuto', 'INTEGER DEFAULT 0');
 };
 
 export const getDb = async () => {
@@ -360,6 +364,7 @@ const normalizePedido = (row) => {
   return {
     ...row,
     atendido: row.atendido === 1 || row.atendido === true,
+    esAuto: row.esAuto === 1 || row.esAuto === true,
     medicamentosSolicitados: row.medicamentosSolicitados
       ? JSON.parse(row.medicamentosSolicitados)
       : [],
@@ -393,7 +398,7 @@ export const savePedido = async (pedido, syncStatus = 'synced', pendingOp = null
         nombreSolicitante = ?, lugarResidencia = ?, telefonoContacto = ?,
         notas = ?, medicamentosSolicitados = ?, atendido = ?,
         entregasRealizadas = ?, fechaPedido = ?, fechaAtencion = ?,
-        creadoPor = ?, atendidoPor = ?, updated = ?, _syncStatus = ?, _pendingOp = ?
+        creadoPor = ?, atendidoPor = ?, esAuto = ?, updated = ?, _syncStatus = ?, _pendingOp = ?
       WHERE id = ?`,
       [
         pedido.nombreSolicitante,
@@ -407,6 +412,7 @@ export const savePedido = async (pedido, syncStatus = 'synced', pendingOp = null
         pedido.fechaAtencion || null,
         pedido.creadoPor || '',
         pedido.atendidoPor || '',
+        pedido.esAuto ? 1 : 0,
         now,
         syncStatus,
         pendingOp,
@@ -418,8 +424,8 @@ export const savePedido = async (pedido, syncStatus = 'synced', pendingOp = null
       `INSERT INTO pedidos (
         id, nombreSolicitante, lugarResidencia, telefonoContacto, notas,
         medicamentosSolicitados, atendido, entregasRealizadas, fechaPedido,
-        fechaAtencion, creadoPor, atendidoPor, updated, _syncStatus, _pendingOp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        fechaAtencion, creadoPor, atendidoPor, esAuto, updated, _syncStatus, _pendingOp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         pedido.id,
         pedido.nombreSolicitante,
@@ -433,6 +439,7 @@ export const savePedido = async (pedido, syncStatus = 'synced', pendingOp = null
         pedido.fechaAtencion || null,
         pedido.creadoPor || '',
         pedido.atendidoPor || '',
+        pedido.esAuto ? 1 : 0,
         now,
         syncStatus,
         pendingOp,
@@ -457,6 +464,7 @@ export const getAllEntregas = async () => {
     ...e,
     items: e.items ? JSON.parse(e.items) : [],
     darSeguimiento: e.darSeguimiento === 1 || e.darSeguimiento === true,
+    esAuto: e.esAuto === 1 || e.esAuto === true,
   }));
 };
 
@@ -468,6 +476,7 @@ export const getEntregaById = async (id) => {
     ...row,
     items: row.items ? JSON.parse(row.items) : [],
     darSeguimiento: row.darSeguimiento === 1 || row.darSeguimiento === true,
+    esAuto: row.esAuto === 1 || row.esAuto === true,
   };
 };
 
@@ -481,7 +490,7 @@ export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = nu
     await dbInstance.runAsync(
       `UPDATE entregas SET 
         destino = ?, fechaCreacion = ?, estado = ?, items = ?,
-        creadoPor = ?, pedidoId = ?, notas = ?, darSeguimiento = ?,
+        creadoPor = ?, pedidoId = ?, notas = ?, darSeguimiento = ?, esAuto = ?,
         ultimaModificacion = ?,
         updated = ?, _syncStatus = ?, _pendingOp = ?
       WHERE id = ?`,
@@ -494,6 +503,7 @@ export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = nu
         entrega.pedidoId || null,
         entrega.notas || '',
         entrega.darSeguimiento ? 1 : 0,
+        entrega.esAuto ? 1 : 0,
         entrega.ultimaModificacion || now,
         now,
         syncStatus,
@@ -505,8 +515,8 @@ export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = nu
     await dbInstance.runAsync(
       `INSERT INTO entregas (
         id, destino, fechaCreacion, estado, items, creadoPor, pedidoId,
-        notas, darSeguimiento, ultimaModificacion, updated, _syncStatus, _pendingOp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        notas, darSeguimiento, esAuto, ultimaModificacion, updated, _syncStatus, _pendingOp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         entrega.id,
         entrega.destino,
@@ -517,6 +527,7 @@ export const saveEntrega = async (entrega, syncStatus = 'synced', pendingOp = nu
         entrega.pedidoId || null,
         entrega.notas || '',
         entrega.darSeguimiento ? 1 : 0,
+        entrega.esAuto ? 1 : 0,
         entrega.ultimaModificacion || now,
         now,
         syncStatus,

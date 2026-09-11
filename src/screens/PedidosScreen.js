@@ -73,6 +73,7 @@ export default function PedidosScreen({ user }) {
     telefonoContacto: '',
     notas: '',
     medicamentosSolicitados: [],
+    esAuto: false,
   });
   const [editandoPedido, setEditandoPedido] = useState(null); // null = crear, objeto = editar
   const [showMedicamentoModal, setShowMedicamentoModal] = useState(false);
@@ -242,6 +243,7 @@ export default function PedidosScreen({ user }) {
       telefonoContacto: pedido.telefonoContacto || '',
       notas: pedido.notas || '',
       medicamentosSolicitados: pedido.medicamentosSolicitados || [],
+      esAuto: !!pedido.esAuto,
     });
     setShowForm(true);
   };
@@ -255,6 +257,7 @@ export default function PedidosScreen({ user }) {
       telefonoContacto: '',
       notas: '',
       medicamentosSolicitados: [],
+      esAuto: false,
     });
   };
 
@@ -286,6 +289,7 @@ export default function PedidosScreen({ user }) {
           telefonoContacto: formData.telefonoContacto.trim() || '',
           notas: formData.notas.trim() || '',
           medicamentosSolicitados: medicamentosLimpios,
+          esAuto: formData.esAuto,
         });
         cerrarFormPedido();
         Alert.alert('Éxito', 'Pedido actualizado correctamente');
@@ -299,6 +303,7 @@ export default function PedidosScreen({ user }) {
         telefonoContacto: formData.telefonoContacto.trim() || '',
         notas: formData.notas.trim() || '',
         medicamentosSolicitados: medicamentosLimpios,
+        esAuto: formData.esAuto,
         atendido: false,
         entregasRealizadas: [],
         fechaPedido: new Date().toISOString(),
@@ -584,7 +589,14 @@ export default function PedidosScreen({ user }) {
                     ]}
                   />
                   <View>
-                    <Text style={styles.pedidoNombre}>{pedido.nombreSolicitante}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.pedidoNombre}>{pedido.nombreSolicitante}</Text>
+                      {pedido.esAuto && (
+                        <View style={styles.autoBadge}>
+                          <Text style={styles.autoBadgeText}>AUTO</Text>
+                        </View>
+                      )}
+                    </View>
                     {pedido.notas ? (
                       <Text style={styles.pedidoNotas} numberOfLines={1}>
                         📝 {pedido.notas}
@@ -786,6 +798,22 @@ export default function PedidosScreen({ user }) {
                   value={formData.notas}
                   onChangeText={(t) => setFormData({ ...formData, notas: t })}
                 />
+                <TouchableOpacity
+                  style={styles.autoToggleRow}
+                  onPress={() => setFormData({ ...formData, esAuto: !formData.esAuto })}
+                >
+                  {formData.esAuto ? (
+                    <CheckSquare color="#7C3AED" size={22} />
+                  ) : (
+                    <Square color="#9CA3AF" size={22} />
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.autoToggleLabel}>Pedido automático (reabastecimiento)</Text>
+                    <Text style={styles.autoToggleHint}>
+                      Entrará en el reparto automático de Entregas cuando llegue mercancía
+                    </Text>
+                  </View>
+                </TouchableOpacity>
                 <TouchableOpacity
                   style={[
                     styles.saveButton,
@@ -1194,6 +1222,25 @@ const styles = StyleSheet.create({
     color: '#1F2937',
   },
   textArea: { minHeight: 80, textAlignVertical: 'top' },
+  autoToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#F5F3FF',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  autoToggleLabel: { fontSize: 13, fontWeight: '600', color: '#1F2937' },
+  autoToggleHint: { fontSize: 11, color: '#6B7280', marginTop: 2 },
+  autoBadge: {
+    backgroundColor: '#7C3AED',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  autoBadgeText: { color: 'white', fontSize: 9, fontWeight: 'bold' },
   medicamentosSection: {
     marginBottom: 20,
     padding: 12,

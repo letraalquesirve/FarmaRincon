@@ -28,11 +28,16 @@ import {
   User,
   ChevronDown,
   ChevronUp,
+  Zap,
+  FileText,
 } from 'lucide-react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { sendLocalNotification } from '../services/NotificationService';
 import { notificarSeguimientoEntrega } from '../services/AdminNotificationService';
+import { ejecutarAutomatismoEntregas } from '../services/AutoEntregaService';
 import {
   entregasList,
   entregaGetOne,
@@ -50,6 +55,8 @@ export default function EntregasScreen({ user }) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const isUserAdmin = user?.tipo === 'admin';
+  const [ejecutandoAutomatismo, setEjecutandoAutomatismo] = useState(false);
+  const [generandoPdfId, setGenerandoPdfId] = useState(null);
   const [entregas, setEntregas] = useState([]);
   const [medicamentos, setMedicamentos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -226,6 +233,125 @@ export default function EntregasScreen({ user }) {
   // Al ACTIVARLO, manda el aviso de inmediato (no espera al chequeo del
   // día siguiente) - útil si se reactiva por un problema nuevo del
   // mensajero. Al desactivarlo, no manda nada.
+  // Lanza el automatismo de reparto: recorre todos los pedidos marcados
+  // AUTO y pendientes, reparte el stock disponible entre ellos (todo si
+  // alcanza, proporcional si no, nada si no hay stock), descuenta el
+  // stock real y cierra los pedidos que sí recibieron algo.
+  const handleEjecutarAutomatismo = () => {
+    Alert.alert(
+      'Ejecutar automatismo de entregas',
+      'Va a revisar todos los pedidos marcados como "Pedido automático" y pendientes, y a repartir el stock disponible entre ellos (creando una entrega por cada uno). Esto descuenta stock real y no se puede deshacer. ¿Continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Ejecutar',
+          onPress: async () => {
+            setEjecutandoAutomatismo(true);
+            try {
+              const resumen = await ejecutarAutomatismoEntregas(getUserName());
+              await loadData();
+
+              if (resumen.pedidosProcesados === 0) {
+                Alert.alert('Nada que hacer', 'No hay pedidos marcados como "Pedido automático" pendientes.');
+                return;
+              }
+
+              const partes = [
+                `Pedidos revisados: ${resumen.pedidosProcesados}`,
+                `Entregas creadas y cerradas: ${resumen.entregasCreadas}`,
+              ];
+              if (resumen.entregasVaciasSinVincular > 0) {
+                partes.push(
+                  `⚠️ ${resumen.entregasVaciasSinVincular} pedido(s) se quedaron sin nada que darles (sin stock de ninguno de sus medicamentos) - quedan pendientes para revisar a mano.`
+                );
+              }
+              if (resumen.medicamentosSinStock.length > 0) {
+                partes.push(`Sin stock en absoluto: ${resumen.medicamentosSinStock.join(', ')}`);
+              }
+              if (resumen.errores.length > 0) {
+                partes.push(`⚠️ Falló al procesar: ${resumen.errores.join(', ')}`);
+              }
+              Alert.alert('Automatismo completado', partes.join('\n\n'));
+            } catch (error) {
+              console.error('Error ejecutando automatismo:', error);
+              Alert.alert('Error', 'No se pudo completar el automatismo');
+            } finally {
+              setEjecutandoAutomatismo(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // PDF de una entrega puntual, con el pedido enlazado al pie (si existe)
+  const handleGenerarPdfEntrega = async (entrega) => {
+    setGenerandoPdfId(entrega.id);
+    try {
+      const filasItems = (entrega.items || [])
+        .map(
+          (it) => `
+            <tr>
+              <td style="padding:6px 8px;border:1px solid #ddd;">${it.nombre || ''}</td>
+              <td style="padding:6px 8px;border:1px solid #ddd;">${it.presentacion || ''}</td>
+              <td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">${it.cantidad || ''}</td>
+              <td style="padding:6px 8px;border:1px solid #ddd;">${it.ubicacion || ''}</td>
+            </tr>`
+        )
+        .join('');
+
+      let pedidoHtml = '';
+      if (entrega.pedidoId) {
+        const pedido = await pedidoGetOne(entrega.pedidoId);
+        if (pedido) {
+          const filasPedido = (pedido.medicamentosSolicitados || [])
+            .map((m) => `<li>${m.nombre}${m.cantidad ? ` — cantidad: ${m.cantidad}` : ''}</li>`)
+            .join('');
+          pedidoHtml = `
+            <h3 style="margin-top:30px;background:#F5F3FF;color:#7C3AED;padding:8px;">
+              Pedido enlazado: ${pedido.nombreSolicitante}
+            </h3>
+            ${pedido.lugarResidencia ? `<p><strong>Lugar:</strong> ${pedido.lugarResidencia}</p>` : ''}
+            ${pedido.telefonoContacto ? `<p><strong>Teléfono:</strong> ${pedido.telefonoContacto}</p>` : ''}
+            <p><strong>Medicamentos solicitados originalmente:</strong></p>
+            <ul>${filasPedido}</ul>
+            ${pedido.notas ? `<p><strong>Notas del pedido:</strong> ${pedido.notas}</p>` : ''}
+          `;
+        }
+      }
+
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Entrega - ${entrega.destino}</title>
+        <style>body{font-family:Arial;padding:20px}</style></head>
+        <body>
+          <h2>Entrega a ${entrega.destino}</h2>
+          <p><strong>Fecha:</strong> ${formatDate(entrega.fechaCreacion)}</p>
+          ${entrega.esAuto ? '<p><strong>Origen:</strong> Automatismo de reparto</p>' : ''}
+          ${entrega.notas ? `<p><strong>Notas:</strong> ${entrega.notas}</p>` : ''}
+          <table style="width:100%;border-collapse:collapse;margin-top:16px;">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:6px 8px;background:#FFEDD5;">Nombre</th>
+                <th style="text-align:left;padding:6px 8px;background:#FFEDD5;">Presentación</th>
+                <th style="text-align:center;padding:6px 8px;background:#FFEDD5;">Cantidad</th>
+                <th style="text-align:left;padding:6px 8px;background:#FFEDD5;">Ubicación</th>
+              </tr>
+            </thead>
+            <tbody>${filasItems || '<tr><td colspan="4" style="padding:8px;">Sin medicamentos</td></tr>'}</tbody>
+          </table>
+          ${pedidoHtml}
+        </body></html>`;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf' });
+    } catch (error) {
+      console.error('Error generando PDF de entrega:', error);
+      Alert.alert('Error', 'No se pudo generar el PDF');
+    } finally {
+      setGenerandoPdfId(null);
+    }
+  };
+
   const toggleSeguimiento = async (entrega) => {
     try {
       const nuevoValor = !entrega.darSeguimiento;
@@ -520,6 +646,19 @@ export default function EntregasScreen({ user }) {
       <View style={styles.header}>
         <MinusCircle color="#EA580C" size={28} />
         <Text style={styles.title}>Entregas</Text>
+        {isUserAdmin && (
+          <TouchableOpacity
+            style={styles.autoButton}
+            onPress={handleEjecutarAutomatismo}
+            disabled={ejecutandoAutomatismo}
+          >
+            {ejecutandoAutomatismo ? (
+              <ActivityIndicator color="white" size="small" />
+            ) : (
+              <Zap color="white" size={18} />
+            )}
+          </TouchableOpacity>
+        )}
         <TouchableOpacity style={styles.addButton} onPress={() => setShowFormModal(true)}>
           <Plus color="white" size={20} />
         </TouchableOpacity>
@@ -603,7 +742,14 @@ export default function EntregasScreen({ user }) {
                       style={[styles.statusDot, isAbierta ? styles.abiertaDot : styles.cerradaDot]}
                     />
                     <View>
-                      <Text style={styles.entregaDestino}>{entrega.destino}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={styles.entregaDestino}>{entrega.destino}</Text>
+                        {entrega.esAuto && (
+                          <View style={styles.autoBadgeEntrega}>
+                            <Text style={styles.autoBadgeEntregaText}>AUTO</Text>
+                          </View>
+                        )}
+                      </View>
                       {entrega.notas ? (
                         <Text style={styles.entregaNotas} numberOfLines={1}>
                           📝 {entrega.notas}
@@ -616,6 +762,16 @@ export default function EntregasScreen({ user }) {
                     </View>
                   </View>
                   <View style={styles.entregaHeaderRight}>
+                    <TouchableOpacity
+                      onPress={() => handleGenerarPdfEntrega(entrega)}
+                      disabled={generandoPdfId === entrega.id}
+                    >
+                      {generandoPdfId === entrega.id ? (
+                        <ActivityIndicator size="small" color="#7C3AED" />
+                      ) : (
+                        <FileText color="#7C3AED" size={20} />
+                      )}
+                    </TouchableOpacity>
                     {isUserAdmin && (
                       <TouchableOpacity onPress={() => eliminarEntrega(entrega)}>
                         <Trash2 color="#DC2626" size={20} />
@@ -939,6 +1095,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  autoButton: {
+    backgroundColor: '#7C3AED',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  autoBadgeEntrega: {
+    backgroundColor: '#7C3AED',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  autoBadgeEntregaText: { color: 'white', fontSize: 9, fontWeight: 'bold' },
   searchContainer: { backgroundColor: 'white', padding: 16 },
   searchInputContainer: {
     flexDirection: 'row',
