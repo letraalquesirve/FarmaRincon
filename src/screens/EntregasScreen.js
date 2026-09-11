@@ -237,6 +237,60 @@ export default function EntregasScreen({ user }) {
   // AUTO y pendientes, reparte el stock disponible entre ellos (todo si
   // alcanza, proporcional si no, nada si no hay stock), descuenta el
   // stock real y cierra los pedidos que sí recibieron algo.
+  // Reporte PDF del automatismo: producto por producto, cuánto había,
+  // cuánto se pidió en total, y qué le tocó a cada pedido (incluso los
+  // que se quedaron en 0, para ver el panorama completo)
+  const handleGenerarPdfReporteAutomatismo = async (detallePorProducto) => {
+    try {
+      const secciones = detallePorProducto
+        .map((prod) => {
+          const filas = prod.asignaciones
+            .map(
+              (a) => `
+              <tr>
+                <td style="padding:6px 8px;border:1px solid #ddd;">${a.solicitante}</td>
+                <td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">${a.cantidadPedida}</td>
+                <td style="padding:6px 8px;border:1px solid #ddd;text-align:center;${
+                  a.cantidadAsignada < a.cantidadPedida ? 'color:#DC2626;font-weight:bold;' : ''
+                }">${a.cantidadAsignada}</td>
+              </tr>`
+            )
+            .join('');
+          return `
+            <h3 style="background:#F5F3FF;color:#7C3AED;padding:8px;margin-top:20px;">
+              ${prod.nombre}${prod.presentacion ? ` (${prod.presentacion})` : ''}
+            </h3>
+            <p>Stock disponible: <strong>${prod.stockTotal}</strong> &nbsp;|&nbsp; Total pedido: <strong>${prod.totalPedido}</strong></p>
+            <table style="width:100%;border-collapse:collapse;">
+              <thead>
+                <tr>
+                  <th style="text-align:left;padding:6px 8px;background:#EDE9FE;">Pedido</th>
+                  <th style="text-align:center;padding:6px 8px;background:#EDE9FE;">Pidió</th>
+                  <th style="text-align:center;padding:6px 8px;background:#EDE9FE;">Recibió</th>
+                </tr>
+              </thead>
+              <tbody>${filas}</tbody>
+            </table>`;
+        })
+        .join('');
+
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+        <title>Reporte de automatismo</title>
+        <style>body{font-family:Arial;padding:20px}</style></head>
+        <body>
+          <h2>Reporte del automatismo de entregas</h2>
+          <p>${new Date().toLocaleString('es')}</p>
+          ${secciones}
+        </body></html>`;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf' });
+    } catch (error) {
+      console.error('Error generando reporte PDF del automatismo:', error);
+      Alert.alert('Error', 'El automatismo se completó bien, pero no se pudo generar el reporte PDF');
+    }
+  };
+
   const handleEjecutarAutomatismo = () => {
     Alert.alert(
       'Ejecutar automatismo de entregas',
@@ -272,6 +326,10 @@ export default function EntregasScreen({ user }) {
                 partes.push(`⚠️ Falló al procesar: ${resumen.errores.join(', ')}`);
               }
               Alert.alert('Automatismo completado', partes.join('\n\n'));
+
+              if (resumen.detallePorProducto?.length > 0) {
+                await handleGenerarPdfReporteAutomatismo(resumen.detallePorProducto);
+              }
             } catch (error) {
               console.error('Error ejecutando automatismo:', error);
               Alert.alert('Error', 'No se pudo completar el automatismo');

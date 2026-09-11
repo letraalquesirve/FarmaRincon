@@ -102,8 +102,24 @@ export const ejecutarAutomatismoEntregas = async (nombreUsuario) => {
     }
   }
 
-  // 5. Armar una entrega por cada pedido AUTO
+  // 5. Armar una entrega por cada pedido AUTO, y de paso reunir el
+  // detalle producto por producto (para el PDF del reporte)
   const descuentosAcumulados = new Map(); // clave -> cantidad total a descontar del stock real
+  const detallePorClave = new Map(); // clave -> { nombre, presentacion, stockTotal, totalPedido, asignaciones: [] }
+
+  const obtenerDetalle = (k, nombre, presentacion) => {
+    if (!detallePorClave.has(k)) {
+      const stockInfo = stockPorClave.get(k);
+      detallePorClave.set(k, {
+        nombre,
+        presentacion: presentacion || '',
+        stockTotal: stockInfo ? stockInfo.total : 0,
+        totalPedido: pedidoPorClave.get(k) || 0,
+        asignaciones: [],
+      });
+    }
+    return detallePorClave.get(k);
+  };
 
   for (const pedido of pedidosAuto) {
     try {
@@ -111,10 +127,17 @@ export const ejecutarAutomatismoEntregas = async (nombreUsuario) => {
       for (const item of pedido.medicamentosSolicitados || []) {
         const k = clave(item.nombre, item.presentacion);
         const coeficiente = coeficientePorClave.get(k) || 0;
-        if (coeficiente === 0) continue; // escenario A: no entra a la entrega
+        const cantidadADar = coeficiente > 0 ? Math.floor(coeficiente * (item.cantidad || 0)) : 0;
 
-        const cantidadADar = Math.floor(coeficiente * (item.cantidad || 0));
-        if (cantidadADar <= 0) continue; // el redondeo lo dejó en 0
+        // Registrar en el detalle SIEMPRE (aunque le haya tocado 0), para
+        // que el reporte muestre el panorama completo por producto
+        obtenerDetalle(k, item.nombre, item.presentacion).asignaciones.push({
+          solicitante: pedido.nombreSolicitante,
+          cantidadPedida: item.cantidad || 0,
+          cantidadAsignada: cantidadADar,
+        });
+
+        if (cantidadADar <= 0) continue; // escenario A, o el redondeo lo dejó en 0
 
         itemsEntrega.push({
           medicamentoId: null, // puede salir de varios lotes, no de uno solo
@@ -187,6 +210,10 @@ export const ejecutarAutomatismoEntregas = async (nombreUsuario) => {
       restante -= aDescontar;
     }
   }
+
+  resumen.detallePorProducto = Array.from(detallePorClave.values()).sort((a, b) =>
+    a.nombre.localeCompare(b.nombre)
+  );
 
   return resumen;
 };
