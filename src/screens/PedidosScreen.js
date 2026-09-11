@@ -237,12 +237,19 @@ export default function PedidosScreen({ user }) {
   // para editarlo en vez de crear uno nuevo
   const abrirEditarPedido = (pedido) => {
     setEditandoPedido(pedido);
+    // Pedidos guardados ANTES de este arreglo pueden traer ítems sin 'id'
+    // (se quitaba antes de guardar) - se les genera uno aquí mismo, así
+    // la lista de "Seleccionados" siempre tiene una key única para
+    // renderizar y borrar el ítem correcto.
+    const medicamentosConId = (pedido.medicamentosSolicitados || []).map((med) =>
+      med.id ? med : { ...med, id: Date.now().toString() + Math.random().toString(36).substring(2, 6) }
+    );
     setFormData({
       nombreSolicitante: pedido.nombreSolicitante || '',
       lugarResidencia: pedido.lugarResidencia || '',
       telefonoContacto: pedido.telefonoContacto || '',
       notas: pedido.notas || '',
-      medicamentosSolicitados: pedido.medicamentosSolicitados || [],
+      medicamentosSolicitados: medicamentosConId,
       esAuto: !!pedido.esAuto,
     });
     setShowForm(true);
@@ -274,10 +281,12 @@ export default function PedidosScreen({ user }) {
 
     setIsSubmitting(true);
 
-    const medicamentosLimpios = formData.medicamentosSolicitados.map((med) => {
-      const { id, ...medLimpio } = med;
-      return medLimpio;
-    });
+    // Se guarda tal cual, CON su 'id' (clave local para las listas, no es
+    // el id del medicamento real - ese va aparte en medicamentoId). Antes
+    // se quitaba antes de guardar, y al reabrir para editar, la lista de
+    // "Seleccionados" se quedaba sin key única para cada ítem (React se
+    // quejaba, y borrar un ítem podía afectar al equivocado).
+    const medicamentosLimpios = formData.medicamentosSolicitados;
 
     try {
       if (editandoPedido) {
