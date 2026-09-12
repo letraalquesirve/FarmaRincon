@@ -763,6 +763,16 @@ export const contarCatalogoMexico = async () => {
   return result?.count || 0;
 };
 
+// Lista de categorías únicas realmente cargadas del catálogo de México -
+// para que la IA elija entre las de verdad, no ejemplos libres inventados.
+export const obtenerCategoriasMexicoDisponibles = async () => {
+  const dbInstance = await getDb();
+  const rows = await dbInstance.getAllAsync(
+    `SELECT DISTINCT categoria FROM catalogo_mexico WHERE categoria != '' ORDER BY categoria`
+  );
+  return rows.map((r) => r.categoria);
+};
+
 // ─────────────────────────────────────────────────────────────
 // EQUIVALENCIAS DE CATEGORÍA (México -> propia)
 // ─────────────────────────────────────────────────────────────

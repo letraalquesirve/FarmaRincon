@@ -47,6 +47,7 @@ import {
   categoriaGetByNombre,
   catalogoMexicoBuscar,
   traducirCategoriaMexico,
+  catalogoMexicoCategoriasDisponibles,
 } from '../services/LocalDataService';
 import { buscarCategoriaPorNombreParecido } from '../utils/categoriaSimilar';
 
@@ -549,7 +550,27 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
     const modelos = [{ nombre: 'gemini-2.5-flash' }];
     const MAX_REINTENTOS_POR_MODELO = 3;
 
-    const getPrompt = () => `Analiza esta imagen de medicamento y extrae JSON:
+    // Lista real de categorías del catálogo de México (si ya se importó) -
+    // para que la IA elija entre las de verdad, no ejemplos libres que
+    // luego no coincidan con nada.
+    const categoriasDisponibles = await catalogoMexicoCategoriasDisponibles();
+    const usaListaCerrada = categoriasDisponibles.length > 0;
+
+    const getPrompt = () => {
+      if (usaListaCerrada) {
+        return `Analiza esta imagen de medicamento y extrae JSON:
+{
+  "nombre": "nombre del medicamento",
+  "presentacion": "presentación (ej: Tabletas 500mg)",
+  "categoria": "categoría farmacológica",
+  "vencimiento": "fecha en YYYY-MM-DD"
+}
+Para "categoria", elige EXACTAMENTE una de esta lista (copia el texto tal cual, sin modificarlo), la que mejor corresponda:
+${categoriasDisponibles.map((c) => `- ${c}`).join('\n')}
+Si genuinamente ninguna aplica, usa "Otros".
+Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
+      }
+      return `Analiza esta imagen de medicamento y extrae JSON:
 {
   "nombre": "nombre del medicamento",
   "presentacion": "presentación (ej: Tabletas 500mg)",
@@ -557,6 +578,7 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
   "vencimiento": "fecha en YYYY-MM-DD"
 }
 Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
+    };
 
     const apiKey = await AsyncStorage.getItem('gemini_api_key');
     if (!apiKey) {
@@ -622,10 +644,15 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
           setMensajeReintentoIA('');
           // Nuevo orden de prioridad para la categoría (nombre lo extrae la IA,
           // pero la categoría se refina así):
-          // 1. Lo que propuso la IA (respaldo si nada más encuentra algo)
+          // 1. Lo que propuso la IA, ya eligiendo de la lista real de México
+          //    (si estaba disponible) - se traduce a categoría propia de una vez
           // 2. Catálogo de México (COFEPRIS) por nombre parecido - más preciso
+          //    porque no depende de que la IA haya leído bien la letra chica
           // 3. Tu propio inventario ya registrado, por nombre parecido
           let categoriaFinal = resultado.data.categoria || '';
+          if (usaListaCerrada && categoriaFinal) {
+            categoriaFinal = await traducirCategoriaMexico(categoriaFinal);
+          }
           const nombreDetectado = resultado.data.nombre || '';
 
           if (nombreDetectado) {
