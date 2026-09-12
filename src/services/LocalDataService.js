@@ -163,3 +163,28 @@ export const categoriaCreate = async (data) => {
   await SQLite.saveCategoria(record);
   return record;
 };
+
+// ───────────────────── CATÁLOGO DE MÉXICO ─────────────────────
+export const catalogoMexicoReemplazar = async (filas) => {
+  return await SQLite.reemplazarCatalogoMexico(filas);
+};
+
+export const catalogoMexicoBuscar = async (nombre) => {
+  return await SQLite.buscarEnCatalogoMexico(nombre);
+};
+
+export const catalogoMexicoContar = async () => {
+  return await SQLite.contarCatalogoMexico();
+};
+
+export const categoriasMexicoRevisadas = async () => {
+  return await SQLite.obtenerCategoriasMexicoRevisadas();
+};
+
+export const guardarEquivalenciasCategorias = async (decisiones) => {
+  return await SQLite.guardarEquivalenciasCategorias(decisiones);
+};
+
+export const traducirCategoriaMexico = async (categoriaMexico) => {
+  return await SQLite.traducirCategoriaMexico(categoriaMexico);
+};

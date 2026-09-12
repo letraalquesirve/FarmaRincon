@@ -45,6 +45,8 @@ import {
   medicamentoUpdate,
   historyCreate,
   categoriaGetByNombre,
+  catalogoMexicoBuscar,
+  traducirCategoriaMexico,
 } from '../services/LocalDataService';
 import { buscarCategoriaPorNombreParecido } from '../utils/categoriaSimilar';
 
@@ -55,6 +57,7 @@ export default function RegisterScreen({ user }) {
   const [imageBase64, setImageBase64] = useState(null);
   const [comprimiendo, setComprimiendo] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [mensajeReintentoIA, setMensajeReintentoIA] = useState('');
   const [checkingDuplicate, setCheckingDuplicate] = useState(false);
   const [duplicateFound, setDuplicateFound] = useState(null);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -542,6 +545,7 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
 
   const processImageWithAI = async (base64Image) => {
     setProcessing(true);
+    setMensajeReintentoIA('');
     const modelos = [{ nombre: 'gemini-2.5-flash' }];
     const MAX_REINTENTOS_POR_MODELO = 3;
 
@@ -551,7 +555,8 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
   "presentacion": "presentación (ej: Tabletas 500mg)",
   "categoria": "categoría farmacológica (Analgésico, Antibiótico, etc.)",
   "vencimiento": "fecha en YYYY-MM-DD"
-}`;
+}
+Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
 
     const apiKey = await AsyncStorage.getItem('gemini_api_key');
     if (!apiKey) {
@@ -580,13 +585,19 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
                   ],
                 },
               ],
-              generationConfig: { temperature: 0.2 },
+              generationConfig: { temperature: 0.2, response_mime_type: 'application/json' },
             }),
             signal: controller.signal,
           }
         );
         clearTimeout(timeoutId);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        // 503 = Gemini saturado (vale la pena esperar y reintentar). Otros
+        // códigos (401/403 API Key inválida, 400 solicitud mal formada,
+        // etc.) NUNCA se arreglan solos reintentando - hay que avisar de
+        // una vez, no perder tiempo esperando en vano.
+        if (!response.ok) {
+          return { success: false, status: response.status, error: `HTTP ${response.status}` };
+        }
         const data = await response.json();
         let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
         text = text
@@ -597,19 +608,42 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
         return { success: true, data: aiData };
       } catch (error) {
         clearTimeout(timeoutId);
-        return { success: false, error: error.message };
+        // Un timeout (abort) o un fallo de red sí vale la pena reintentar;
+        // un JSON mal formado, con el modo JSON forzado ya activado, sería
+        // rarísimo, pero tampoco cuesta nada intentar una vez más.
+        return { success: false, status: null, error: error.message };
       }
     };
 
     for (const modelo of modelos) {
       for (let intento = 1; intento <= MAX_REINTENTOS_POR_MODELO; intento++) {
-        if (intento > 1) await new Promise((r) => setTimeout(r, 10000));
         const resultado = await intentarConModelo(modelo, intento);
         if (resultado.success) {
+          setMensajeReintentoIA('');
+          // Nuevo orden de prioridad para la categoría (nombre lo extrae la IA,
+          // pero la categoría se refina así):
+          // 1. Lo que propuso la IA (respaldo si nada más encuentra algo)
+          // 2. Catálogo de México (COFEPRIS) por nombre parecido - más preciso
+          // 3. Tu propio inventario ya registrado, por nombre parecido
+          let categoriaFinal = resultado.data.categoria || '';
+          const nombreDetectado = resultado.data.nombre || '';
+
+          if (nombreDetectado) {
+            const matchMexico = await catalogoMexicoBuscar(nombreDetectado);
+            if (matchMexico?.categoria) {
+              categoriaFinal = await traducirCategoriaMexico(matchMexico.categoria);
+            } else {
+              const matchPropio = await buscarCategoriaPorNombreParecido(nombreDetectado);
+              if (matchPropio?.categoria) {
+                categoriaFinal = matchPropio.categoria;
+              }
+            }
+          }
+
           setFormData({
-            nombre: resultado.data.nombre || '',
+            nombre: nombreDetectado,
             presentacion: resultado.data.presentacion || '',
-            categoria: resultado.data.categoria || '',
+            categoria: categoriaFinal,
             cantidad: '',
             vencimiento: resultado.data.vencimiento || '',
             ubicacion: '',
@@ -618,8 +652,29 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
           setProcessing(false);
           return true;
         }
+
+        // Fallo. Si es un error que nunca se arregla reintentando
+        // (cualquier 4xx: API Key inválida, solicitud mal formada, etc.),
+        // no tiene sentido esperar - se corta de una vez.
+        const esErrorPermanente = resultado.status && resultado.status >= 400 && resultado.status < 500;
+        if (esErrorPermanente) {
+          console.log(`❌ Error permanente (${resultado.status}), no vale la pena reintentar`);
+          break;
+        }
+
+        if (intento < MAX_REINTENTOS_POR_MODELO) {
+          const esperaSegundos = resultado.status === 503 ? intento * 3 : 3;
+          setMensajeReintentoIA(
+            resultado.status === 503
+              ? `IA ocupada, reintentando (${intento + 1} de ${MAX_REINTENTOS_POR_MODELO})...`
+              : `Reintentando (${intento + 1} de ${MAX_REINTENTOS_POR_MODELO})...`
+          );
+          await new Promise((r) => setTimeout(r, esperaSegundos * 1000));
+        }
       }
     }
+
+    setMensajeReintentoIA('');
 
     Alert.alert('Error', 'No se pudo procesar la imagen. Ingresa los datos manualmente.', [
       { text: 'Manual', onPress: () => setStep('form') },
@@ -1013,7 +1068,7 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
     return (
       <View style={styles.centered}>
         <ActivityIndicator size={50} color="#7C3AED" />
-        <Text style={styles.processingText}>Analizando imagen con IA...</Text>
+        <Text style={styles.processingText}>{mensajeReintentoIA || 'Analizando imagen con IA...'}</Text>
         <Text style={styles.processingSubtext}>Esto tomará unos segundos</Text>
       </View>
     );
@@ -1160,7 +1215,7 @@ Si no entiendes algún campo, déjalo como cadena vacía.`;
               <View style={styles.processingOverlay}>
                 <ActivityIndicator color="white" size="large" />
                 <Text style={styles.processingText}>
-                  {comprimiendo ? 'Comprimiendo imagen...' : 'Analizando imagen...'}
+                  {comprimiendo ? 'Comprimiendo imagen...' : mensajeReintentoIA || 'Analizando imagen...'}
                 </Text>
               </View>
             )}

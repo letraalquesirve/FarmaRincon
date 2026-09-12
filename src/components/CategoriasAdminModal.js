@@ -11,7 +11,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { Tag, Plus, MapPin, Trash2, X, Check, FileText } from 'lucide-react-native';
+import { Tag, Plus, MapPin, Trash2, X, Check, FileText, Download } from 'lucide-react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import {
@@ -24,6 +24,7 @@ import {
 } from '../services/LocalDataService';
 import { normalizeSearchTerm } from '../utils/normalizeText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import CatalogoMexicoModal from './CatalogoMexicoModal';
 
 export default function CategoriasAdminModal({ visible, onClose }) {
   const insets = useSafeAreaInsets();
@@ -35,6 +36,7 @@ export default function CategoriasAdminModal({ visible, onClose }) {
   const [ubicacionForm, setUbicacionForm] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [generandoPDF, setGenerandoPDF] = useState(false);
+  const [catalogoMexicoVisible, setCatalogoMexicoVisible] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -262,6 +264,9 @@ export default function CategoriasAdminModal({ visible, onClose }) {
             <Text style={styles.headerTitle}>Categorías ({categorias.length})</Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+            <TouchableOpacity onPress={() => setCatalogoMexicoVisible(true)}>
+              <Download color="#7C3AED" size={24} />
+            </TouchableOpacity>
             <TouchableOpacity onPress={generarPDFCategorias} disabled={generandoPDF}>
               {generandoPDF ? (
                 <ActivityIndicator size="small" color="#7C3AED" />
@@ -343,6 +348,14 @@ export default function CategoriasAdminModal({ visible, onClose }) {
             </View>
           </View>
         </Modal>
+
+        <CatalogoMexicoModal
+          visible={catalogoMexicoVisible}
+          onClose={() => {
+            setCatalogoMexicoVisible(false);
+            cargar();
+          }}
+        />
       </View>
     </Modal>
   );

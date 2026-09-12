@@ -114,8 +114,33 @@ export const initDatabase = async () => {
       _pendingOp TEXT
     );
 
+    -- Catálogo de México (COFEPRIS) - se reemplaza completo cada vez que un
+    -- admin importa el archivo nuevo (cada ~6 meses). Es solo de consulta
+    -- para sugerir categoría al registrar - nunca se edita a mano.
+    CREATE TABLE IF NOT EXISTS catalogo_mexico (
+      id TEXT PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      generico TEXT,
+      presentacion TEXT,
+      categoria TEXT,
+      updated TEXT
+    );
+
+    -- Traduce cada categoría cruda de México a una categoría propia ya
+    -- existente. Si categoria_propia es NULL, significa que esa categoría de
+    -- México se agregó tal cual (tiene su propia fila en 'categorias'), sin
+    -- necesitar traducción. Una fila aquí = "ya fue revisada por un admin",
+    -- así el próximo import cada 6 meses no vuelve a preguntar por las que
+    -- no cambiaron.
+    CREATE TABLE IF NOT EXISTS categoria_equivalencias (
+      categoria_mexico TEXT PRIMARY KEY,
+      categoria_propia TEXT,
+      updated TEXT
+    );
+
     -- Índices para rendimiento
     CREATE INDEX IF NOT EXISTS idx_medicamentos_nombre ON medicamentos(nombre);
+    CREATE INDEX IF NOT EXISTS idx_catalogo_mexico_nombre ON catalogo_mexico(nombre);
     CREATE INDEX IF NOT EXISTS idx_medicamentos_activo ON medicamentos(activo);
     CREATE INDEX IF NOT EXISTS idx_pedidos_atendido ON pedidos(atendido);
     CREATE INDEX IF NOT EXISTS idx_entregas_estado ON entregas(estado);
@@ -673,6 +698,111 @@ export const saveCategoria = async (categoria, syncStatus = 'synced', pendingOp 
     );
   }
   return categoria;
+};
+
+// ─────────────────────────────────────────────────────────────
+// CATÁLOGO DE MÉXICO (COFEPRIS) - solo consulta, se reemplaza completo
+// cada vez que un admin importa el archivo nuevo (cada ~6 meses)
+// ─────────────────────────────────────────────────────────────
+
+// Reemplaza TODO el contenido de catalogo_mexico de una sola vez. 'filas'
+// es un array de { nombre, generico, presentacion, categoria }. Usa una
+// transacción - sin esto, 10,000 inserciones una por una sería muy lento.
+export const reemplazarCatalogoMexico = async (filas) => {
+  const dbInstance = await getDb();
+  const now = new Date().toISOString();
+  await dbInstance.withTransactionAsync(async () => {
+    await dbInstance.runAsync('DELETE FROM catalogo_mexico');
+    for (const fila of filas) {
+      await dbInstance.runAsync(
+        `INSERT INTO catalogo_mexico (id, nombre, generico, presentacion, categoria, updated) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          Date.now().toString() + Math.random().toString(36).substring(2, 8),
+          fila.nombre,
+          fila.generico || '',
+          fila.presentacion || '',
+          fila.categoria || '',
+          now,
+        ]
+      );
+    }
+  });
+  return filas.length;
+};
+
+// Busca por nombre parecido (mismo criterio simple que ya usa
+// categoriaSimilar.js para el propio inventario - contiene, sin acentos ni
+// mayúsculas). Devuelve el primer match con categoría no vacía, o null.
+export const buscarEnCatalogoMexico = async (nombreBuscado) => {
+  const dbInstance = await getDb();
+  const normalizado = nombreBuscado
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  if (!normalizado) return null;
+
+  const candidatos = await dbInstance.getAllAsync(
+    `SELECT nombre, generico, presentacion, categoria FROM catalogo_mexico WHERE categoria != ''`
+  );
+  for (const c of candidatos) {
+    const nombreNorm = (c.nombre || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    if (nombreNorm.includes(normalizado) || normalizado.includes(nombreNorm)) {
+      return c;
+    }
+  }
+  return null;
+};
+
+export const contarCatalogoMexico = async () => {
+  const dbInstance = await getDb();
+  const result = await dbInstance.getFirstAsync('SELECT COUNT(*) as count FROM catalogo_mexico');
+  return result?.count || 0;
+};
+
+// ─────────────────────────────────────────────────────────────
+// EQUIVALENCIAS DE CATEGORÍA (México -> propia)
+// ─────────────────────────────────────────────────────────────
+
+// Trae las categorías crudas de México que YA fueron revisadas antes (en un
+// import anterior) - para no volver a preguntar por las que no cambiaron.
+export const obtenerCategoriasMexicoRevisadas = async () => {
+  const dbInstance = await getDb();
+  const rows = await dbInstance.getAllAsync('SELECT categoria_mexico FROM categoria_equivalencias');
+  return new Set(rows.map((r) => r.categoria_mexico));
+};
+
+// Guarda las decisiones de la revisión (2-B): para cada categoría de
+// México revisada, o bien 'categoriaPropia' (equivalente a una ya
+// existente) o null (se agregó tal cual, sin traducción).
+export const guardarEquivalenciasCategorias = async (decisiones) => {
+  const dbInstance = await getDb();
+  const now = new Date().toISOString();
+  await dbInstance.withTransactionAsync(async () => {
+    for (const { categoriaMexico, categoriaPropia } of decisiones) {
+      await dbInstance.runAsync(
+        `INSERT OR REPLACE INTO categoria_equivalencias (categoria_mexico, categoria_propia, updated) VALUES (?, ?, ?)`,
+        [categoriaMexico, categoriaPropia || null, now]
+      );
+    }
+  });
+};
+
+// Traduce una categoría cruda de México a la categoría propia
+// correspondiente - o la deja igual si no tiene traducción (se agregó tal
+// cual como su propia categoría).
+export const traducirCategoriaMexico = async (categoriaMexico) => {
+  if (!categoriaMexico) return categoriaMexico;
+  const dbInstance = await getDb();
+  const row = await dbInstance.getFirstAsync(
+    'SELECT categoria_propia FROM categoria_equivalencias WHERE categoria_mexico = ?',
+    [categoriaMexico]
+  );
+  if (row && row.categoria_propia) return row.categoria_propia;
+  return categoriaMexico;
 };
 
 // ─────────────────────────────────────────────────────────────
