@@ -961,49 +961,90 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
     const categoriaActual = esManual ? manualFormData.categoria : formData.categoria;
     if (!nombreActual || categoriaActual) return;
 
-    const parecido = await buscarCategoriaPorNombreParecido(nombreActual);
-    if (!parecido) return;
+    // 1) Catálogo de México por nombre parecido (más preciso y no necesita red)
+    let categoriaEncontrada = null;
+    const matchMexico = await catalogoMexicoBuscar(nombreActual);
+    if (matchMexico?.categoria) {
+      categoriaEncontrada = await traducirCategoriaMexico(matchMexico.categoria);
+    } else {
+      // 2) Tu propio inventario ya registrado, por nombre parecido
+      const parecido = await buscarCategoriaPorNombreParecido(nombreActual);
+      if (parecido) categoriaEncontrada = parecido.categoria;
+    }
+    if (!categoriaEncontrada) return;
 
-    const ubicacion = await obtenerUbicacionDesdeCategoria(parecido.categoria);
+    const ubicacion = await obtenerUbicacionDesdeCategoria(categoriaEncontrada);
     if (esManual) {
       setManualFormData((prev) =>
-        prev.categoria ? prev : { ...prev, categoria: parecido.categoria, ubicacion: ubicacion || prev.ubicacion }
+        prev.categoria ? prev : { ...prev, categoria: categoriaEncontrada, ubicacion: ubicacion || prev.ubicacion }
       );
     } else {
       setFormData((prev) =>
-        prev.categoria ? prev : { ...prev, categoria: parecido.categoria, ubicacion: ubicacion || prev.ubicacion }
+        prev.categoria ? prev : { ...prev, categoria: categoriaEncontrada, ubicacion: ubicacion || prev.ubicacion }
       );
     }
   };
 
+  // Botón explícito "sugerir categoría con IA" en el formulario manual. A
+  // diferencia de la foto, aquí YA se tiene el nombre real (lo escribió la
+  // persona) - así que el orden es: 1) México por nombre (instantáneo, sin
+  // gastar ni una llamada a la IA), 2) recién ahí preguntarle a Gemini
+  // (usando la lista real de categorías, igual que en la foto), 3) si la
+  // IA falla del todo, tu propio inventario por nombre parecido.
   const consultarCategoriaPorTexto = async (nombreMedicamento, esManual = false, intento = 1) => {
     if (!nombreMedicamento?.trim()) {
       Alert.alert('Error', 'Primero ingresa el nombre del medicamento');
       return;
     }
     setConsultandoCategoria(true);
+
+    const aplicarCategoria = async (categoria, mensaje) => {
+      if (esManual) {
+        setManualFormData((prev) => ({ ...prev, categoria }));
+        const ubicacion = await obtenerUbicacionDesdeCategoria(categoria);
+        if (ubicacion) setManualFormData((prev) => ({ ...prev, ubicacion }));
+      } else {
+        setFormData((prev) => ({ ...prev, categoria }));
+        const ubicacion = await obtenerUbicacionDesdeCategoria(categoria);
+        if (ubicacion) setFormData((prev) => ({ ...prev, ubicacion }));
+      }
+      Alert.alert('Categoría sugerida', mensaje || `"${categoria}"`);
+    };
+
+    // 1) Catálogo de México primero - si ya tenemos el nombre real, no hace
+    // falta ni gastar una llamada a la IA para esto.
+    if (intento === 1) {
+      const matchMexico = await catalogoMexicoBuscar(nombreMedicamento);
+      if (matchMexico?.categoria) {
+        const categoria = await traducirCategoriaMexico(matchMexico.categoria);
+        await aplicarCategoria(categoria, `"${categoria}"\n(del catálogo de México, por "${matchMexico.nombre}")`);
+        setConsultandoCategoria(false);
+        return;
+      }
+    }
+
     const espera = intento * 1000;
     try {
       const apiKey = await AsyncStorage.getItem('gemini_api_key');
       if (!apiKey) {
         Alert.alert('Error', 'Configura tu API Key de Gemini primero');
+        setConsultandoCategoria(false);
         return;
       }
+
+      const categoriasDisponibles = await catalogoMexicoCategoriasDisponibles();
+      const usaListaCerrada = categoriasDisponibles.length > 0;
+      const textoPrompt = usaListaCerrada
+        ? `Cuál es la categoría farmacológica de "${nombreMedicamento}"? Responde ÚNICAMENTE con el texto EXACTO de una de estas opciones (cópialo tal cual):\n${categoriasDisponibles.map((c) => `- ${c}`).join('\n')}\nSi ninguna aplica, responde "Otros".`
+        : `Cuál es la categoría farmacológica de "${nombreMedicamento}"? Responde SOLO con una palabra de la lista: Analgésico, Antibiótico, Antiinflamatorio, Antihipertensivo, Antidiabético, Antihistamínico, Antidepresivo, Ansiolítico, Anticonvulsivante, Anticoagulante, Broncodilatador, Corticosteroide, Diurético, Laxante, Otros.`;
+
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `Cuál es la categoría farmacológica de "${nombreMedicamento}"? Responde SOLO con una palabra de la lista: Analgésico, Antibiótico, Antiinflamatorio, Antihipertensivo, Antidiabético, Antihistamínico, Antidepresivo, Ansiolítico, Anticonvulsivante, Anticoagulante, Broncodilatador, Corticosteroide, Diurético, Laxante, Otros.`,
-                  },
-                ],
-              },
-            ],
+            contents: [{ parts: [{ text: textoPrompt }] }],
           }),
         }
       );
@@ -1016,42 +1057,21 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
       const data = await response.json();
       let categoria = 'Otros';
       if (data.candidates?.[0]) categoria = data.candidates[0].content.parts[0].text.trim();
-      if (categoria.length > 30) categoria = 'Otros';
-      if (esManual) {
-        setManualFormData((prev) => ({ ...prev, categoria }));
-        const ubicacion = await obtenerUbicacionDesdeCategoria(categoria);
-        if (ubicacion) {
-          setManualFormData((prev) => ({ ...prev, ubicacion }));
-        }
-      } else {
-        setFormData((prev) => ({ ...prev, categoria }));
-        const ubicacion = await obtenerUbicacionDesdeCategoria(categoria);
-        if (ubicacion) {
-          setFormData((prev) => ({ ...prev, ubicacion }));
-        }
-      }
-      Alert.alert('Categoría sugerida', `"${categoria}"`);
+      if (categoria.length > 60) categoria = 'Otros';
+      if (usaListaCerrada) categoria = await traducirCategoriaMexico(categoria);
+      await aplicarCategoria(categoria);
     } catch (error) {
       if (intento < 3) {
         await new Promise((r) => setTimeout(r, espera));
         return consultarCategoriaPorTexto(nombreMedicamento, esManual, intento + 1);
       }
-      // Sin red (o la IA falló del todo): buscar un medicamento parecido ya
-      // registrado y copiar su categoría, en vez de dejar al usuario sin nada.
+      // La IA falló del todo: buscar un medicamento parecido ya registrado
+      // y copiar su categoría, en vez de dejar a la persona sin nada.
       const parecido = await buscarCategoriaPorNombreParecido(nombreMedicamento);
       if (parecido) {
-        if (esManual) {
-          setManualFormData((prev) => ({ ...prev, categoria: parecido.categoria }));
-          const ubicacion = await obtenerUbicacionDesdeCategoria(parecido.categoria);
-          if (ubicacion) setManualFormData((prev) => ({ ...prev, ubicacion }));
-        } else {
-          setFormData((prev) => ({ ...prev, categoria: parecido.categoria }));
-          const ubicacion = await obtenerUbicacionDesdeCategoria(parecido.categoria);
-          if (ubicacion) setFormData((prev) => ({ ...prev, ubicacion }));
-        }
-        Alert.alert(
-          'Sin conexión — categoría por parecido',
-          `No se pudo consultar la IA. Se usó la categoría de "${parecido.nombreParecido}" (nombre parecido) → "${parecido.categoria}". Revisa que sea correcta.`
+        await aplicarCategoria(
+          parecido.categoria,
+          `"${parecido.categoria}"\n(no se pudo consultar la IA - se usó la categoría de "${parecido.nombreParecido}", nombre parecido en tu inventario. Revisa que sea correcta.)`
         );
       } else {
         Alert.alert('Error', 'No se pudo obtener la categoría. Selecciona manualmente.');
