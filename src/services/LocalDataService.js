@@ -181,6 +181,10 @@ export const catalogoMexicoCategoriasDisponibles = async () => {
   return await SQLite.obtenerCategoriasMexicoDisponibles();
 };
 
+export const catalogoMexicoListar = async () => {
+  return await SQLite.listarCatalogoMexico();
+};
+
 export const categoriasMexicoRevisadas = async () => {
   return await SQLite.obtenerCategoriasMexicoRevisadas();
 };

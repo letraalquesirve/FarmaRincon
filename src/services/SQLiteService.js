@@ -773,6 +773,15 @@ export const obtenerCategoriasMexicoDisponibles = async () => {
   return rows.map((r) => r.categoria);
 };
 
+// Lista completa del catálogo de México - para el selector de medicamentos
+// de Pedidos (que ahora se arma desde aquí, no desde el inventario propio).
+export const listarCatalogoMexico = async () => {
+  const dbInstance = await getDb();
+  return await dbInstance.getAllAsync(
+    `SELECT id, nombre, generico, presentacion, categoria FROM catalogo_mexico ORDER BY nombre`
+  );
+};
+
 // ─────────────────────────────────────────────────────────────
 // EQUIVALENCIAS DE CATEGORÍA (México -> propia)
 // ─────────────────────────────────────────────────────────────

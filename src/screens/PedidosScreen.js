@@ -47,6 +47,7 @@ import {
   entregasList,
   entregaUpdate,
   medicamentosList,
+  catalogoMexicoListar,
 } from '../services/LocalDataService';
 import { useRoute, useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -112,12 +113,18 @@ export default function PedidosScreen({ user }) {
     else setLoading(true);
 
     try {
-      const [todosPedidos, todasEntregas, medicamentosParaPedir] = await Promise.all([
-        pedidosList(),
-        entregasList(),
-        medicamentosList(), // todos: activos e inactivos - un pedido es solo para
-        // registrar qué se necesita, no depende de si hay existencia ahora mismo
-      ]);
+      const [todosPedidos, todasEntregas] = await Promise.all([pedidosList(), entregasList()]);
+
+      // El selector de Pedidos se arma desde el catálogo de México (lista
+      // mucho más completa de lo que se puede necesitar, no solo lo que ya
+      // está en el inventario propio). Si todavía no se ha importado el
+      // catálogo, cae de respaldo al inventario propio, para no dejar el
+      // selector vacío mientras tanto.
+      let medicamentosParaPedir = await catalogoMexicoListar();
+      if (medicamentosParaPedir.length === 0) {
+        medicamentosParaPedir = await medicamentosList();
+      }
+
       const pedidosOrdenados = [...todosPedidos].sort(
         (a, b) => new Date(b.fechaPedido || 0) - new Date(a.fechaPedido || 0)
       );
