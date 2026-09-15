@@ -131,9 +131,16 @@ export default function PedidosScreen({ user }) {
       const entregasOrdenadas = [...todasEntregas].sort(
         (a, b) => new Date(b.fechaCreacion || 0) - new Date(a.fechaCreacion || 0)
       );
-      const medicamentosOrdenados = [...medicamentosParaPedir].sort((a, b) =>
-        (a.nombre || '').localeCompare(b.nombre || '')
-      );
+      const medicamentosOrdenados = [...medicamentosParaPedir]
+        .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
+        .map((m) => ({
+          ...m,
+          // Pre-calculado una sola vez al cargar, no en cada búsqueda -
+          // con ~9,000 entradas del catálogo de México, evita repetir
+          // miles de .toLowerCase() de más cada vez que se busca.
+          _nombreLower: (m.nombre || '').toLowerCase(),
+          _presentacionLower: (m.presentacion || '').toLowerCase(),
+        }));
       setPedidos(pedidosOrdenados);
       setEntregas(entregasOrdenadas);
       setMedicamentos(medicamentosOrdenados);
@@ -164,19 +171,16 @@ export default function PedidosScreen({ user }) {
 
   const onRefresh = useCallback(() => loadData(true), [loadData]);
 
-  // El resto del código permanece igual (buscarMedicamentos, actualizarCantidad, etc.)
+  // Ya NO se llama en cada tecla - solo al tocar "Buscar" (o Enter), para
+  // no recalcular el filtro sobre ~9,000 entradas en cada carácter escrito.
   const buscarMedicamentos = (texto) => {
     if (!texto.trim()) {
-      // Lista completa por defecto - se puede filtrar escribiendo, en vez
-      // de empezar en blanco y obligar a escribir para ver algo
-      setMedicamentosFiltrados(medicamentos);
+      setMedicamentosFiltrados([]);
       return;
     }
     const textoLower = texto.toLowerCase().trim();
     const filtrados = medicamentos.filter(
-      (m) =>
-        m.nombre.toLowerCase().includes(textoLower) ||
-        (m.presentacion || '').toLowerCase().includes(textoLower)
+      (m) => m._nombreLower.includes(textoLower) || m._presentacionLower.includes(textoLower)
     );
     setMedicamentosFiltrados(filtrados);
   };
@@ -500,7 +504,7 @@ export default function PedidosScreen({ user }) {
     setSeleccionTemporal([]);
     setBusqueda('');
     setCantidades({});
-    setMedicamentosFiltrados(medicamentos); // lista completa desde el primer momento
+    setMedicamentosFiltrados([]); // arranca vacío - hay que buscar (son ~9,000)
     setShowMedicamentoModal(true);
   };
 
@@ -872,13 +876,12 @@ export default function PedidosScreen({ user }) {
             <Search size={20} color="#9CA3AF" />
             <TextInput
               style={styles.searchInputFull}
-              placeholder="Buscar..."
+              placeholder="Buscar y tocar Buscar..."
               placeholderTextColor="#9CA3AF"
               value={busqueda}
-              onChangeText={(text) => {
-                setBusqueda(text);
-                buscarMedicamentos(text);
-              }}
+              onChangeText={setBusqueda}
+              onSubmitEditing={() => buscarMedicamentos(busqueda)}
+              returnKeyType="search"
             />
             {busqueda !== '' && (
               <TouchableOpacity
@@ -892,9 +895,23 @@ export default function PedidosScreen({ user }) {
               </TouchableOpacity>
             )}
           </View>
+          <TouchableOpacity
+            style={styles.botonBuscarMedicamento}
+            onPress={() => buscarMedicamentos(busqueda)}
+          >
+            <Search size={18} color="white" />
+            <Text style={styles.botonBuscarMedicamentoTexto}>Buscar</Text>
+          </TouchableOpacity>
           <FlatList
             data={medicamentosFiltrados}
             keyExtractor={(item) => item.id}
+            ListEmptyComponent={
+              <Text style={styles.medicamentosVacioTexto}>
+                {busqueda.trim()
+                  ? 'Sin resultados - prueba con otro nombre'
+                  : 'Escribe el nombre del medicamento y toca Buscar (catálogo de ~9,000 de México)'}
+              </Text>
+            }
             style={styles.flatList}
             renderItem={({ item }) => (
               <View style={styles.medicamentoItemSeleccion}>
@@ -1368,6 +1385,26 @@ const styles = StyleSheet.create({
     margin: 16,
   },
   searchInputFull: { flex: 1, paddingVertical: 12, fontSize: 16, marginLeft: 8, color: '#1F2937' },
+  botonBuscarMedicamento: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#7C3AED',
+    borderRadius: 12,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    marginBottom: 12,
+  },
+  botonBuscarMedicamentoTexto: { color: 'white', fontWeight: 'bold', fontSize: 15 },
+  medicamentosVacioTexto: {
+    textAlign: 'center',
+    color: '#9CA3AF',
+    fontSize: 13,
+    marginTop: 40,
+    paddingHorizontal: 30,
+    lineHeight: 19,
+  },
   flatList: { flex: 1 },
   medicamentoItemSeleccion: {
     flexDirection: 'row',
