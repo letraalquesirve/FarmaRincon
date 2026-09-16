@@ -84,6 +84,8 @@ export default function PedidosScreen({ user }) {
   const [editandoPedido, setEditandoPedido] = useState(null); // null = crear, objeto = editar
   const [exportandoId, setExportandoId] = useState(null);
   const [importandoPedido, setImportandoPedido] = useState(false);
+  const [previewImport, setPreviewImport] = useState(null); // datos leídos del JSON, esperando confirmación
+  const [duplicadoImport, setDuplicadoImport] = useState(null); // pedido existente parecido, si hay
   const [showMedicamentoModal, setShowMedicamentoModal] = useState(false);
   const [busqueda, setBusqueda] = useState('');
   const [medicamentosFiltrados, setMedicamentosFiltrados] = useState([]);
@@ -323,9 +325,10 @@ export default function PedidosScreen({ user }) {
       atendidoPor: '',
     });
     await loadData();
-    Alert.alert('Éxito', 'Pedido importado correctamente');
   };
 
+  // Paso 1: leer y validar el archivo, y dejarlo esperando en preview - NO
+  // se crea nada todavía hasta que la persona confirme en el modal.
   const handleImportarPedido = async () => {
     if (importandoPedido) return;
     try {
@@ -347,26 +350,36 @@ export default function PedidosScreen({ user }) {
         return;
       }
 
-      const duplicado = buscarPosibleDuplicado(datosPortables);
-      if (duplicado) {
-        Alert.alert(
-          'Posible duplicado',
-          `Ya existe un pedido de "${duplicado.nombreSolicitante}" con los mismos medicamentos (creado el ${formatDate(duplicado.fechaPedido)}). ¿Importar de todos modos?`,
-          [
-            { text: 'Cancelar', style: 'cancel' },
-            { text: 'Importar de todos modos', onPress: () => crearPedidoImportado(datosPortables) },
-          ]
-        );
-        return;
-      }
-
-      await crearPedidoImportado(datosPortables);
+      setDuplicadoImport(buscarPosibleDuplicado(datosPortables));
+      setPreviewImport(datosPortables);
     } catch (error) {
-      console.error('Error importando pedido:', error);
+      console.error('Error leyendo pedido a importar:', error);
       Alert.alert('Error', 'No se pudo leer ese archivo. ¿Es el JSON correcto?');
     } finally {
       setImportandoPedido(false);
     }
+  };
+
+  // Paso 2: la persona confirma desde el modal de preview
+  const confirmarImportacionPedido = async () => {
+    if (!previewImport) return;
+    setImportandoPedido(true);
+    try {
+      await crearPedidoImportado(previewImport);
+      setPreviewImport(null);
+      setDuplicadoImport(null);
+      Alert.alert('Éxito', 'Pedido importado correctamente');
+    } catch (error) {
+      console.error('Error importando pedido:', error);
+      Alert.alert('Error', 'No se pudo importar el pedido');
+    } finally {
+      setImportandoPedido(false);
+    }
+  };
+
+  const cancelarImportacionPedido = () => {
+    setPreviewImport(null);
+    setDuplicadoImport(null);
   };
 
   const abrirEditarPedido = (pedido) => {
@@ -1257,6 +1270,98 @@ export default function PedidosScreen({ user }) {
           <Image source={{ uri: zoomImage }} style={styles.zoomModalImage} resizeMode="contain" />
         </View>
       </Modal>
+
+      <Modal
+        visible={!!previewImport}
+        transparent
+        animationType="slide"
+        onRequestClose={cancelarImportacionPedido}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '85%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Confirmar importación</Text>
+              <TouchableOpacity onPress={cancelarImportacionPedido}>
+                <XCircle size={24} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            {previewImport && (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {duplicadoImport && (
+                  <View style={styles.avisoDuplicado}>
+                    <Text style={styles.avisoDuplicadoTexto}>
+                      ⚠️ Ya existe un pedido parecido: "{duplicadoImport.nombreSolicitante}" con los mismos
+                      medicamentos, creado el {formatDate(duplicadoImport.fechaPedido)}. Revisa antes de
+                      confirmar, para no duplicarlo.
+                    </Text>
+                  </View>
+                )}
+
+                <Text style={styles.previewLabel}>Solicitante</Text>
+                <Text style={styles.previewValor}>{previewImport.nombreSolicitante}</Text>
+
+                {previewImport.lugarResidencia ? (
+                  <>
+                    <Text style={styles.previewLabel}>Lugar</Text>
+                    <Text style={styles.previewValor}>{previewImport.lugarResidencia}</Text>
+                  </>
+                ) : null}
+
+                {previewImport.telefonoContacto ? (
+                  <>
+                    <Text style={styles.previewLabel}>Teléfono</Text>
+                    <Text style={styles.previewValor}>{previewImport.telefonoContacto}</Text>
+                  </>
+                ) : null}
+
+                {previewImport.notas ? (
+                  <>
+                    <Text style={styles.previewLabel}>Notas</Text>
+                    <Text style={styles.previewValor}>{previewImport.notas}</Text>
+                  </>
+                ) : null}
+
+                <Text style={styles.previewLabel}>
+                  Medicamentos ({(previewImport.medicamentosSolicitados || []).length})
+                </Text>
+                {(previewImport.medicamentosSolicitados || []).map((m, idx) => (
+                  <Text key={idx} style={styles.previewMedicamento}>
+                    • {m.nombre} {m.cantidad ? `x${m.cantidad}` : ''}
+                  </Text>
+                ))}
+
+                {previewImport.exportadoDe ? (
+                  <Text style={styles.previewExportadoDe}>
+                    Exportado por {previewImport.exportadoDe}
+                    {previewImport.exportadoEl ? ` el ${formatDate(previewImport.exportadoEl)}` : ''}
+                  </Text>
+                ) : null}
+
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+                  <TouchableOpacity
+                    style={[styles.saveButton, { flex: 1, backgroundColor: '#9CA3AF' }]}
+                    onPress={cancelarImportacionPedido}
+                  >
+                    <Text style={styles.saveButtonText}>Cancelar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.saveButton, { flex: 1 }]}
+                    onPress={confirmarImportacionPedido}
+                    disabled={importandoPedido}
+                  >
+                    {importandoPedido ? (
+                      <ActivityIndicator color="white" size="small" />
+                    ) : (
+                      <Text style={styles.saveButtonText}>Confirmar importación</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1464,6 +1569,17 @@ const styles = StyleSheet.create({
   },
   saveButtonDisabled: { opacity: 0.5 },
   saveButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  avisoDuplicado: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+  },
+  avisoDuplicadoTexto: { fontSize: 12.5, color: '#92400E', lineHeight: 18 },
+  previewLabel: { fontSize: 12, fontWeight: '600', color: '#6B7280', marginTop: 12 },
+  previewValor: { fontSize: 15, color: '#1F2937', marginTop: 2 },
+  previewMedicamento: { fontSize: 14, color: '#1F2937', marginTop: 4 },
+  previewExportadoDe: { fontSize: 11, color: '#9CA3AF', marginTop: 20, fontStyle: 'italic' },
   entregaOptionCard: {
     backgroundColor: '#F9FAFB',
     marginHorizontal: 16,
