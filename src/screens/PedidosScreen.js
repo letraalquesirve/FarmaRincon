@@ -36,7 +36,12 @@ import {
   User,
   CheckSquare,
   Square,
+  Share2,
+  Upload,
 } from 'lucide-react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 import { sendLocalNotification } from '../services/NotificationService';
 import { notificarNuevoPedido } from '../services/AdminNotificationService';
 import {
@@ -77,6 +82,8 @@ export default function PedidosScreen({ user }) {
     esAuto: false,
   });
   const [editandoPedido, setEditandoPedido] = useState(null); // null = crear, objeto = editar
+  const [exportandoId, setExportandoId] = useState(null);
+  const [importandoPedido, setImportandoPedido] = useState(false);
   const [showMedicamentoModal, setShowMedicamentoModal] = useState(false);
   const [busqueda, setBusqueda] = useState('');
   const [medicamentosFiltrados, setMedicamentosFiltrados] = useState([]);
@@ -246,6 +253,122 @@ export default function PedidosScreen({ user }) {
 
   // Abre el formulario ya lleno con los datos de un pedido pendiente,
   // para editarlo en vez de crear uno nuevo
+  // Exporta UN pedido a un archivo .json portátil, para que otro admin en
+  // OTRO celular (con su propia base de datos, sin pasar por el ciclo de
+  // Cargar/Salvar BD) lo pueda importar directo. Se excluyen campos que no
+  // significan nada fuera de este celular (id interno, si está atendido,
+  // entregas ya vinculadas, esAuto) - queda solo el contenido del pedido
+  // en sí.
+  const handleExportarPedido = async (pedido) => {
+    setExportandoId(pedido.id);
+    try {
+      const datosPortables = {
+        tipo: 'pedido_farmarincon',
+        version: 1,
+        nombreSolicitante: pedido.nombreSolicitante || '',
+        lugarResidencia: pedido.lugarResidencia || '',
+        telefonoContacto: pedido.telefonoContacto || '',
+        notas: pedido.notas || '',
+        medicamentosSolicitados: pedido.medicamentosSolicitados || [],
+        exportadoDe: getUserName(),
+        exportadoEl: new Date().toISOString(),
+      };
+
+      const nombreArchivo = `pedido_${(pedido.nombreSolicitante || 'sin_nombre').replace(/[^a-zA-Z0-9]/g, '_')}.json`;
+      const fileUri = FileSystem.cacheDirectory + nombreArchivo;
+      await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(datosPortables, null, 2));
+      await Sharing.shareAsync(fileUri, { mimeType: 'application/json' });
+    } catch (error) {
+      console.error('Error exportando pedido:', error);
+      Alert.alert('Error', 'No se pudo exportar el pedido');
+    } finally {
+      setExportandoId(null);
+    }
+  };
+
+  // Compara por solicitante (sin importar mayúsculas) + mismo conjunto de
+  // medicamentos (incluso en otro orden), para detectar si ya existe algo
+  // igual antes de crear un duplicado por accidente.
+  const buscarPosibleDuplicado = (datosPortables) => {
+    const nombreNorm = (datosPortables.nombreSolicitante || '').trim().toLowerCase();
+    const medsNuevos = new Set(
+      (datosPortables.medicamentosSolicitados || []).map((m) => (m.nombre || '').trim().toLowerCase())
+    );
+    return pedidos.find((p) => {
+      if ((p.nombreSolicitante || '').trim().toLowerCase() !== nombreNorm) return false;
+      const medsExistentes = new Set(
+        (p.medicamentosSolicitados || []).map((m) => (m.nombre || '').trim().toLowerCase())
+      );
+      if (medsExistentes.size !== medsNuevos.size) return false;
+      for (const m of medsNuevos) {
+        if (!medsExistentes.has(m)) return false;
+      }
+      return true;
+    });
+  };
+
+  const crearPedidoImportado = async (datosPortables) => {
+    await pedidoCreate({
+      nombreSolicitante: datosPortables.nombreSolicitante,
+      lugarResidencia: datosPortables.lugarResidencia || '',
+      telefonoContacto: datosPortables.telefonoContacto || '',
+      notas: datosPortables.notas || '',
+      medicamentosSolicitados: datosPortables.medicamentosSolicitados || [],
+      esAuto: false,
+      atendido: false,
+      entregasRealizadas: [],
+      fechaPedido: new Date().toISOString(),
+      fechaAtencion: null,
+      creadoPor: `${getUserName()} (importado)`,
+      atendidoPor: '',
+    });
+    await loadData();
+    Alert.alert('Éxito', 'Pedido importado correctamente');
+  };
+
+  const handleImportarPedido = async () => {
+    if (importandoPedido) return;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/json', '*/*'],
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) return;
+
+      const fileUri = result.assets?.[0]?.uri;
+      if (!fileUri) return;
+
+      setImportandoPedido(true);
+      const contenido = await FileSystem.readAsStringAsync(fileUri);
+      const datosPortables = JSON.parse(contenido);
+
+      if (datosPortables.tipo !== 'pedido_farmarincon' || !datosPortables.nombreSolicitante) {
+        Alert.alert('Archivo inválido', 'Ese archivo no es un pedido exportado de FarmaRincón.');
+        return;
+      }
+
+      const duplicado = buscarPosibleDuplicado(datosPortables);
+      if (duplicado) {
+        Alert.alert(
+          'Posible duplicado',
+          `Ya existe un pedido de "${duplicado.nombreSolicitante}" con los mismos medicamentos (creado el ${formatDate(duplicado.fechaPedido)}). ¿Importar de todos modos?`,
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Importar de todos modos', onPress: () => crearPedidoImportado(datosPortables) },
+          ]
+        );
+        return;
+      }
+
+      await crearPedidoImportado(datosPortables);
+    } catch (error) {
+      console.error('Error importando pedido:', error);
+      Alert.alert('Error', 'No se pudo leer ese archivo. ¿Es el JSON correcto?');
+    } finally {
+      setImportandoPedido(false);
+    }
+  };
+
   const abrirEditarPedido = (pedido) => {
     setEditandoPedido(pedido);
     // Pedidos guardados ANTES de este arreglo pueden traer ítems sin 'id'
@@ -527,6 +650,17 @@ export default function PedidosScreen({ user }) {
       <View style={styles.header}>
         <ClipboardList color="#7C3AED" size={28} />
         <Text style={styles.title}>Gestión de Pedidos</Text>
+        <TouchableOpacity
+          style={styles.importButton}
+          onPress={handleImportarPedido}
+          disabled={importandoPedido}
+        >
+          {importandoPedido ? (
+            <ActivityIndicator color="white" size="small" />
+          ) : (
+            <Upload color="white" size={18} />
+          )}
+        </TouchableOpacity>
         <TouchableOpacity style={styles.addButton} onPress={() => setShowForm(true)}>
           <Plus color="white" size={20} />
         </TouchableOpacity>
@@ -629,6 +763,16 @@ export default function PedidosScreen({ user }) {
                   </View>
                 </View>
                 <View style={styles.pedidoHeaderRight}>
+                  <TouchableOpacity
+                    onPress={() => handleExportarPedido(pedido)}
+                    disabled={exportandoId === pedido.id}
+                  >
+                    {exportandoId === pedido.id ? (
+                      <ActivityIndicator size="small" color="#7C3AED" />
+                    ) : (
+                      <Share2 color="#7C3AED" size={20} />
+                    )}
+                  </TouchableOpacity>
                   {!pedido.atendido && (
                     <TouchableOpacity onPress={() => abrirEditarPedido(pedido)}>
                       <Pencil color="#7C3AED" size={20} />
@@ -1130,6 +1274,15 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   title: { fontSize: 20, fontWeight: 'bold', color: '#1F2937', flex: 1, marginLeft: 10 },
+  importButton: {
+    backgroundColor: '#9333EA',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
   addButton: {
     backgroundColor: '#7C3AED',
     width: 40,
