@@ -39,6 +39,7 @@ import DatePickerInput from '../components/DatePickerInput';
 import KeyboardAvoidingScrollView from '../components/KeyboardAvoidingScrollView';
 import { getDaysUntilExpiry } from '../utils/dateUtils';
 import CategoriaPicker from '../components/CategoriaPicker';
+import UbicacionPicker from '../components/UbicacionPicker';
 import {
   medicamentosList,
   medicamentoCreate,
@@ -1185,11 +1186,10 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
           </View>
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Ubicación</Text>
-            <TextInput
-              style={styles.input}
+            <UbicacionPicker
               value={formData.ubicacion}
-              onChangeText={(t) => setFormData({ ...formData, ubicacion: t })}
-              placeholder="Ej: Estante A3"
+              onChange={(v) => setFormData({ ...formData, ubicacion: v })}
+              showLabel={false}
             />
           </View>
           <TouchableOpacity
@@ -1444,11 +1444,10 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
                 />
 
                 <Text style={styles.label}>Ubicación</Text>
-                <TextInput
-                  style={styles.input}
+                <UbicacionPicker
                   value={manualFormData.ubicacion}
-                  onChangeText={(t) => setManualFormData((prev) => ({ ...prev, ubicacion: t }))}
-                  placeholder="Ej: Estante A3"
+                  onChange={(v) => setManualFormData((prev) => ({ ...prev, ubicacion: v }))}
+                  showLabel={false}
                 />
 
                 <Text style={styles.label}>Foto (opcional)</Text>

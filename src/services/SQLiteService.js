@@ -114,6 +114,17 @@ export const initDatabase = async () => {
       _pendingOp TEXT
     );
 
+    -- Catálogo de ubicaciones físicas (Caja 3-7, Estante 4, etc.) - evita
+    -- que la misma ubicación se escriba de formas distintas ("Caja 3-7" vs
+    -- "CJ 3-7") al ser un selector, no texto libre.
+    CREATE TABLE IF NOT EXISTS ubicaciones (
+      id TEXT PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      updated TEXT,
+      _syncStatus TEXT DEFAULT 'synced',
+      _pendingOp TEXT
+    );
+
     -- Catálogo de México (COFEPRIS) - se reemplaza completo cada vez que un
     -- admin importa el archivo nuevo (cada ~6 meses). Es solo de consulta
     -- para sugerir categoría al registrar - nunca se edita a mano.
@@ -669,6 +680,51 @@ export const saveHistory = async (historyItem, syncStatus = 'synced', pendingOp 
 export const getAllCategorias = async () => {
   const dbInstance = await getDb();
   return await dbInstance.getAllAsync('SELECT * FROM categorias ORDER BY nombre');
+};
+
+export const deleteCategoria = async (id) => {
+  const dbInstance = await getDb();
+  await dbInstance.runAsync('DELETE FROM categorias WHERE id = ?', [id]);
+};
+
+// Catálogo de ubicaciones físicas - mismo patrón que categorías
+export const getAllUbicaciones = async () => {
+  const dbInstance = await getDb();
+  return await dbInstance.getAllAsync('SELECT * FROM ubicaciones ORDER BY nombre');
+};
+
+export const getUbicacionByNombre = async (nombre) => {
+  const dbInstance = await getDb();
+  return await dbInstance.getFirstAsync(
+    'SELECT * FROM ubicaciones WHERE LOWER(nombre) = LOWER(?)',
+    [nombre]
+  );
+};
+
+export const saveUbicacion = async (ubicacion, syncStatus = 'synced', pendingOp = null) => {
+  const dbInstance = await getDb();
+  const now = new Date().toISOString();
+  const existing = await dbInstance.getFirstAsync('SELECT id FROM ubicaciones WHERE id = ?', [
+    ubicacion.id,
+  ]);
+
+  if (existing) {
+    await dbInstance.runAsync(
+      `UPDATE ubicaciones SET nombre = ?, updated = ?, _syncStatus = ?, _pendingOp = ? WHERE id = ?`,
+      [ubicacion.nombre, now, syncStatus, pendingOp, ubicacion.id]
+    );
+  } else {
+    await dbInstance.runAsync(
+      `INSERT INTO ubicaciones (id, nombre, updated, _syncStatus, _pendingOp) VALUES (?, ?, ?, ?, ?)`,
+      [ubicacion.id, ubicacion.nombre, now, syncStatus, pendingOp]
+    );
+  }
+  return ubicacion;
+};
+
+export const deleteUbicacion = async (id) => {
+  const dbInstance = await getDb();
+  await dbInstance.runAsync('DELETE FROM ubicaciones WHERE id = ?', [id]);
 };
 
 export const getCategoriaByNombre = async (nombre) => {

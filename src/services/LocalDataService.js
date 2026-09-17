@@ -164,6 +164,44 @@ export const categoriaCreate = async (data) => {
   return record;
 };
 
+// Faltaban - CategoriasAdminModal.js ya las importaba y usaba, pero no
+// existían aquí (bug ya presente antes de este cambio, se corrige de paso)
+export const categoriaUpdate = async (id, data) => {
+  const record = { ...data, id };
+  await SQLite.saveCategoria(record);
+  return record;
+};
+
+export const categoriaDelete = async (id) => {
+  await SQLite.deleteCategoria(id);
+};
+
+// ───────────────────────── UBICACIONES ─────────────────────────
+export const ubicacionesList = async () => {
+  return await SQLite.getAllUbicaciones();
+};
+
+export const ubicacionGetByNombre = async (nombre) => {
+  return await SQLite.getUbicacionByNombre(nombre);
+};
+
+export const ubicacionCreate = async (data) => {
+  const id = data.id || generateId();
+  const record = { ...data, id };
+  await SQLite.saveUbicacion(record);
+  return record;
+};
+
+export const ubicacionUpdate = async (id, data) => {
+  const record = { ...data, id };
+  await SQLite.saveUbicacion(record);
+  return record;
+};
+
+export const ubicacionDelete = async (id) => {
+  await SQLite.deleteUbicacion(id);
+};
+
 // ───────────────────── CATÁLOGO DE MÉXICO ─────────────────────
 export const catalogoMexicoReemplazar = async (filas) => {
   return await SQLite.reemplazarCatalogoMexico(filas);

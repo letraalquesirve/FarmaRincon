@@ -26,6 +26,7 @@ import {
   Upload,
   Download,
   Tag,
+  MapPin,
   Bell,
   Send,
   Share2,
@@ -43,6 +44,7 @@ import {
 } from '../services/SQLiteService';
 import { medicamentosList, pedidosList, entregasList } from '../services/LocalDataService';
 import CategoriasAdminModal from '../components/CategoriasAdminModal';
+import UbicacionesAdminModal from '../components/UbicacionesAdminModal';
 import {
   forzarChequeoDiario,
   registrarPushTokenUsuarioActual,
@@ -62,6 +64,7 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout, puedeReg
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [syncing, setSyncing] = useState(false); // Estado para sincronización
   const [showCategoriasModal, setShowCategoriasModal] = useState(false);
+  const [showUbicacionesModal, setShowUbicacionesModal] = useState(false);
   const [showUsuariosModal, setShowUsuariosModal] = useState(false);
   const [transfiriendo, setTransfiriendo] = useState(false);
 
@@ -553,6 +556,14 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout, puedeReg
             </TouchableOpacity>
           )}
           {isUserAdmin && (
+            <TouchableOpacity
+              style={styles.apiKeyButton}
+              onPress={() => setShowUbicacionesModal(true)}
+            >
+              <MapPin color="white" size={20} />
+            </TouchableOpacity>
+          )}
+          {isUserAdmin && (
             <TouchableOpacity style={styles.apiKeyButton} onPress={handleForzarChequeoDiario}>
               <Bell color="white" size={20} />
             </TouchableOpacity>
@@ -821,6 +832,11 @@ export default function HomeScreen({ onOpenApiKeyModal, user, onLogout, puedeReg
       <CategoriasAdminModal
         visible={showCategoriasModal}
         onClose={() => setShowCategoriasModal(false)}
+      />
+
+      <UbicacionesAdminModal
+        visible={showUbicacionesModal}
+        onClose={() => setShowUbicacionesModal(false)}
       />
 
       <UsuariosScreen

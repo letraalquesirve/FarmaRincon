@@ -25,6 +25,7 @@ import {
 import { normalizeSearchTerm } from '../utils/normalizeText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CatalogoMexicoModal from './CatalogoMexicoModal';
+import UbicacionPicker from './UbicacionPicker';
 
 export default function CategoriasAdminModal({ visible, onClose }) {
   const insets = useSafeAreaInsets();
@@ -328,11 +329,11 @@ export default function CategoriasAdminModal({ visible, onClose }) {
               />
 
               <Text style={styles.label}>Ubicación física (opcional)</Text>
-              <TextInput
-                style={styles.input}
+              <UbicacionPicker
                 value={ubicacionForm}
-                onChangeText={setUbicacionForm}
-                placeholder="ej. Estante 2, gaveta B"
+                onChange={setUbicacionForm}
+                showLabel={false}
+                placeholder="Seleccionar ubicación"
               />
 
               <TouchableOpacity style={styles.saveButton} onPress={guardar} disabled={guardando}>

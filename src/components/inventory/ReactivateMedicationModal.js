@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LoadingButton } from '../common/LoadingButton';
 import DatePickerInput from '../DatePickerInput';
 import CategoriaPicker from '../CategoriaPicker';
+import UbicacionPicker from '../UbicacionPicker';
 
 export const ReactivateMedicationModal = ({
   visible,
@@ -152,11 +153,10 @@ export const ReactivateMedicationModal = ({
               </View>
 
               <Text style={styles.label}>Ubicación</Text>
-              <TextInput
-                style={styles.input}
+              <UbicacionPicker
                 value={form.ubicacion}
-                onChangeText={(t) => setForm({ ...form, ubicacion: t })}
-                placeholder="Ej: Estante A3"
+                onChange={(v) => setForm({ ...form, ubicacion: v })}
+                showLabel={false}
               />
 
               <View style={styles.mediaButtonsRow}>
