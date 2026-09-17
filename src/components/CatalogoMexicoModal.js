@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { X, FolderOpen, Check, ChevronRight, Search } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   categoriasList,
