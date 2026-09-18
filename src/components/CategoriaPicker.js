@@ -9,6 +9,8 @@ import {
   FlatList,
   TextInput,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Search, X } from 'lucide-react-native';
 import { categoriasList } from '../services/LocalDataService';
@@ -75,7 +77,10 @@ export default function CategoriaPicker({
 
       <Modal visible={modalVisible} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <KeyboardAvoidingView
+            style={styles.modalContent}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          >
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Seleccionar Categoría</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
@@ -127,7 +132,7 @@ export default function CategoriaPicker({
                 }
               />
             )}
-          </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
     </View>

@@ -10,6 +10,8 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Users, Plus, Shield, User as UserIcon, Trash2, X, Check, Grid, CheckSquare, Square } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -273,7 +275,10 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
 
         <Modal visible={modalVisible} animationType="slide" transparent>
           <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+            <KeyboardAvoidingView
+              style={styles.modalContent}
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            >
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>
                   {editando ? 'Editar usuario' : 'Nuevo usuario'}
@@ -343,7 +348,7 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
                   </>
                 )}
               </TouchableOpacity>
-            </View>
+            </KeyboardAvoidingView>
           </View>
         </Modal>
 
