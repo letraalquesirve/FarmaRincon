@@ -20,6 +20,7 @@ import {
   categoriaUpdate,
   categoriaDelete,
   categoriaGetByNombre,
+  categoriaRenombrarEnTodaLaData,
   medicamentosList,
 } from '../services/LocalDataService';
 import { normalizeSearchTerm } from '../utils/normalizeText';
@@ -191,10 +192,23 @@ export default function CategoriasAdminModal({ visible, onClose }) {
       }
 
       if (editando) {
+        const nombreAnterior = editando.nombre;
         await categoriaUpdate(editando.id, {
           nombre: nombreLimpio,
           ubicacion: ubicacionForm.trim(),
         });
+        if (nombreAnterior !== nombreLimpio) {
+          const actualizados = await categoriaRenombrarEnTodaLaData(nombreAnterior, nombreLimpio);
+          setFormVisible(false);
+          await cargar();
+          if (actualizados > 0) {
+            Alert.alert(
+              'Categoría renombrada',
+              `Se actualizaron ${actualizados} medicamento(s) que tenían "${nombreAnterior}" para que ahora digan "${nombreLimpio}".`
+            );
+          }
+          return;
+        }
       } else {
         await categoriaCreate({ nombre: nombreLimpio, ubicacion: ubicacionForm.trim() });
       }

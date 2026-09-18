@@ -687,6 +687,25 @@ export const deleteCategoria = async (id) => {
   await dbInstance.runAsync('DELETE FROM categorias WHERE id = ?', [id]);
 };
 
+// Al renombrar una categoría, actualiza en cascada todos los medicamentos
+// que ya la tenían guardada como texto (y las equivalencias de México que
+// apuntaban a ese nombre) - si no, se quedan "congelados" con el nombre
+// viejo, sin encontrar su ubicación ni aparecer bien en los selectores.
+// Devuelve cuántos medicamentos se actualizaron.
+export const renombrarCategoriaEnTodaLaData = async (nombreViejo, nombreNuevo) => {
+  if (!nombreViejo || !nombreNuevo || nombreViejo === nombreNuevo) return 0;
+  const dbInstance = await getDb();
+  const result = await dbInstance.runAsync(
+    'UPDATE medicamentos SET categoria = ? WHERE categoria = ?',
+    [nombreNuevo, nombreViejo]
+  );
+  await dbInstance.runAsync(
+    'UPDATE categoria_equivalencias SET categoria_propia = ? WHERE categoria_propia = ?',
+    [nombreNuevo, nombreViejo]
+  );
+  return result.changes || 0;
+};
+
 // Catálogo de ubicaciones físicas - mismo patrón que categorías
 export const getAllUbicaciones = async () => {
   const dbInstance = await getDb();

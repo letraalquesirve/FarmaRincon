@@ -176,6 +176,10 @@ export const categoriaDelete = async (id) => {
   await SQLite.deleteCategoria(id);
 };
 
+export const categoriaRenombrarEnTodaLaData = async (nombreViejo, nombreNuevo) => {
+  return await SQLite.renombrarCategoriaEnTodaLaData(nombreViejo, nombreNuevo);
+};
+
 // ───────────────────────── UBICACIONES ─────────────────────────
 export const ubicacionesList = async () => {
   return await SQLite.getAllUbicaciones();
