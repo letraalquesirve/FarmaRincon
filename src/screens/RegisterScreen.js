@@ -1002,18 +1002,34 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
     const categoriaActual = esManual ? manualFormData.categoria : formData.categoria;
     if (!nombreActual || categoriaActual) return;
 
-    const encontrado = await buscarCategoriaLocal(nombreActual);
-    if (!encontrado) return;
+    const aplicar = async (categoria) => {
+      const ubicacion = await obtenerUbicacionDesdeCategoria(categoria);
+      if (esManual) {
+        setManualFormData((prev) =>
+          prev.categoria ? prev : { ...prev, categoria, ubicacion: ubicacion || prev.ubicacion }
+        );
+      } else {
+        setFormData((prev) =>
+          prev.categoria ? prev : { ...prev, categoria, ubicacion: ubicacion || prev.ubicacion }
+        );
+      }
+    };
 
-    const ubicacion = await obtenerUbicacionDesdeCategoria(encontrado.categoria);
-    if (esManual) {
-      setManualFormData((prev) =>
-        prev.categoria ? prev : { ...prev, categoria: encontrado.categoria, ubicacion: ubicacion || prev.ubicacion }
-      );
-    } else {
-      setFormData((prev) =>
-        prev.categoria ? prev : { ...prev, categoria: encontrado.categoria, ubicacion: ubicacion || prev.ubicacion }
-      );
+    const encontrado = await buscarCategoriaLocal(nombreActual);
+    if (encontrado) {
+      await aplicar(encontrado.categoria);
+      return;
+    }
+
+    // Nada local la reconoce - se le pregunta a Gemini antes de rendirse
+    // (silencioso, pero con el mismo spinner que usa el botón explícito,
+    // para que se note que está buscando y no se sienta "colgado").
+    setConsultandoCategoria(true);
+    try {
+      const categoria = await pedirCategoriaAGemini(nombreActual);
+      if (categoria) await aplicar(categoria);
+    } finally {
+      setConsultandoCategoria(false);
     }
   };
 
@@ -1023,6 +1039,30 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
   // gastar ni una llamada a la IA), 2) recién ahí preguntarle a Gemini
   // (usando la lista real de categorías, igual que en la foto), 3) si la
   // IA falla del todo, tu propio inventario por nombre parecido.
+  // Deja el formulario manual completamente en blanco - se usa al abrir (por
+  // si quedó algo de una vez anterior sin guardar) y al cerrar sin guardar.
+  const resetManualForm = () => {
+    setManualFormData({
+      nombre: '',
+      presentacion: '',
+      categoria: '',
+      cantidad: '',
+      vencimiento: '',
+      ubicacion: '',
+    });
+    setManualImageUri(null);
+    setManualImageBase64(null);
+    manualImageBase64Ref.current = null;
+    setAudioUri(null);
+    setAudioFileInfo(null);
+    setAudioBase64(null);
+  };
+
+  const cerrarModalManual = () => {
+    resetManualForm();
+    setManualModalVisible(false);
+  };
+
   const consultarCategoriaPorTexto = async (nombreMedicamento, esManual = false) => {
     if (!nombreMedicamento?.trim()) {
       Alert.alert('Error', 'Primero ingresa el nombre del medicamento');
@@ -1127,7 +1167,9 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
                 <TextInput
                   style={styles.input}
                   value={formData.nombre}
-                  onChangeText={(t) => setFormData({ ...formData, nombre: t })}
+                  onChangeText={(t) =>
+                    setFormData((prev) => ({ ...prev, nombre: t, categoria: '', ubicacion: '' }))
+                  }
                   onBlur={() => sugerirCategoriaAlSalirDelNombre(false)}
                   placeholder="Ej: Paracetamol"
                 />
@@ -1238,7 +1280,13 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
               <Text style={styles.cameraOptionText}>Galería</Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity style={styles.manualButton} onPress={() => setManualModalVisible(true)}>
+          <TouchableOpacity
+            style={styles.manualButton}
+            onPress={() => {
+              resetManualForm();
+              setManualModalVisible(true);
+            }}
+          >
             <Text style={styles.manualButtonText}>📝 MANUAL CON AUDIO-IA</Text>
           </TouchableOpacity>
         </View>
@@ -1322,14 +1370,14 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
         statusBarTranslucent={true}
         hardwareAccelerated={true} // ← Agrega esto
         presentationStyle="overFullScreen" // ← Agrega esto para Android
-        onRequestClose={() => setManualModalVisible(false)}
+        onRequestClose={cerrarModalManual}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <ScrollView>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Registrar Medicamento (Manual)</Text>
-                <TouchableOpacity onPress={() => setManualModalVisible(false)}>
+                <TouchableOpacity onPress={cerrarModalManual}>
                   <X color="#6B7280" size={24} />
                 </TouchableOpacity>
               </View>
@@ -1387,7 +1435,18 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
                     <TextInput
                       style={styles.input}
                       value={manualFormData.nombre}
-                      onChangeText={(t) => setManualFormData({ ...manualFormData, nombre: t })}
+                      onChangeText={(t) =>
+                        setManualFormData((prev) => ({
+                          ...prev,
+                          nombre: t,
+                          // Un nombre nuevo invalida la categoría/ubicación ya
+                          // sugeridas - se limpian de una vez para forzar una
+                          // búsqueda fresca al salir del campo, en vez de
+                          // quedarse pegadas con las del medicamento anterior.
+                          categoria: '',
+                          ubicacion: '',
+                        }))
+                      }
                       onBlur={() => sugerirCategoriaAlSalirDelNombre(true)}
                       placeholder="Ej: Paracetamol"
                     />

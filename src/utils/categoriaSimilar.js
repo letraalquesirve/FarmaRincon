@@ -3,8 +3,8 @@ import { medicamentosList } from '../services/LocalDataService';
 import { normalizeSearchTerm } from './normalizeText';
 import { levenshteinDistance } from './stringDistance';
 
-const UMBRAL_DISTANCIA = 4;
-const LARGO_MINIMO_PALABRA = 4;
+const UMBRAL_DISTANCIA = 2;
+const LARGO_MINIMO_PALABRA = 5;
 
 // Palabras muy cortas o que empiezan con número (dosis, "500mg", "20", "mg",
 // "de", etc.) no sirven para comparar - descartarlas evita falsos positivos.
@@ -35,6 +35,10 @@ export const buscarCategoriaPorNombreParecido = async (nombreMedicamento) => {
     for (const med of todos) {
       const categoria = (med.categoria || '').trim();
       if (!categoria || categoria.toLowerCase() === 'otros') continue;
+      // Un insumo médico (gasa, jeringuilla, etc.) nunca es un "parecido"
+      // válido de un medicamento - son dominios distintos, sin importar
+      // qué tan cerca caiga la distancia de edición entre sus nombres.
+      if (categoria.toLowerCase() === 'insumo médico') continue;
 
       // Separadores típicos de combinados (/, -, ,) deben partir palabras,
       // no pegarlas - si no, "Amoxicilina/Ácido" se normaliza en un solo
