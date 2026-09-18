@@ -10,8 +10,7 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
+  Keyboard,
 } from 'react-native';
 import { Users, Plus, Shield, User as UserIcon, Trash2, X, Check, Grid, CheckSquare, Square } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,6 +32,17 @@ const TODOS_LOS_MODULOS = ['Inventario', 'Registrar', 'Pedidos', 'Entregas', 'Hi
 
 export default function UsuariosScreen({ visible, onClose, user: usuarioActual }) {
   const insets = useSafeAreaInsets();
+  const [alturaTeclado, setAlturaTeclado] = useState(0);
+  useEffect(() => {
+    const mostrar = Keyboard.addListener('keyboardDidShow', (e) =>
+      setAlturaTeclado(e.endCoordinates.height)
+    );
+    const ocultar = Keyboard.addListener('keyboardDidHide', () => setAlturaTeclado(0));
+    return () => {
+      mostrar.remove();
+      ocultar.remove();
+    };
+  }, []);
   const [usuarios, setUsuarios] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
@@ -275,10 +285,7 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
 
         <Modal visible={modalVisible} animationType="slide" transparent>
           <View style={styles.modalOverlay}>
-            <KeyboardAvoidingView
-              style={styles.modalContent}
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            >
+            <View style={[styles.modalContent, { marginBottom: alturaTeclado }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>
                   {editando ? 'Editar usuario' : 'Nuevo usuario'}
@@ -348,7 +355,7 @@ export default function UsuariosScreen({ visible, onClose, user: usuarioActual }
                   </>
                 )}
               </TouchableOpacity>
-            </KeyboardAvoidingView>
+            </View>
           </View>
         </Modal>
 

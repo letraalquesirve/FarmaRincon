@@ -9,8 +9,7 @@ import {
   FlatList,
   TextInput,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
+  Keyboard,
 } from 'react-native';
 import { Search, X } from 'lucide-react-native';
 import { ubicacionesList } from '../services/LocalDataService';
@@ -20,6 +19,17 @@ export default function UbicacionPicker({ value, onChange, placeholder, showLabe
   const [searchTerm, setSearchTerm] = useState('');
   const [ubicaciones, setUbicaciones] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [alturaTeclado, setAlturaTeclado] = useState(0);
+  useEffect(() => {
+    const mostrar = Keyboard.addListener('keyboardDidShow', (e) =>
+      setAlturaTeclado(e.endCoordinates.height)
+    );
+    const ocultar = Keyboard.addListener('keyboardDidHide', () => setAlturaTeclado(0));
+    return () => {
+      mostrar.remove();
+      ocultar.remove();
+    };
+  }, []);
 
   useEffect(() => {
     cargarUbicaciones();
@@ -60,10 +70,7 @@ export default function UbicacionPicker({ value, onChange, placeholder, showLabe
 
       <Modal visible={modalVisible} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView
-            style={styles.modalContent}
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          >
+          <View style={[styles.modalContent, { marginBottom: alturaTeclado }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Seleccionar Ubicación</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
@@ -108,7 +115,7 @@ export default function UbicacionPicker({ value, onChange, placeholder, showLabe
                 }
               />
             )}
-          </KeyboardAvoidingView>
+          </View>
         </View>
       </Modal>
     </View>

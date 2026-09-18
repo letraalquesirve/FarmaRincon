@@ -15,6 +15,59 @@ import { normalizeSearchTerm } from '../utils/normalizeText';
 const clave = (nombre, presentacion) =>
   `${normalizeSearchTerm(nombre || '')}||${normalizeSearchTerm(presentacion || '')}`;
 
+// Saca todos los valores en mg mencionados en un texto de presentación.
+// Maneja tanto el caso simple ("75mg") como listas donde la unidad viene
+// UNA SOLA VEZ al final ("75, 150 O 300 MG" - las tres dosis son mg,
+// aunque solo la última lo diga explícito - así viene el texto genérico
+// del catálogo de México).
+const extraerMg = (texto) => {
+  if (!texto) return [];
+  const bloques = [...texto.matchAll(/(\d+(?:[.,]\d+)?(?:\s*(?:,|o|y)\s*\d+(?:[.,]\d+)?)*)\s*mg/gi)];
+  const valores = [];
+  for (const bloque of bloques) {
+    const numeros = bloque[1].match(/\d+(?:[.,]\d+)?/g) || [];
+    for (const n of numeros) valores.push(parseFloat(n.replace(',', '.')));
+  }
+  return valores;
+};
+
+// Resuelve a qué "producto" del inventario corresponde un ítem de pedido,
+// aunque su presentación no sea el mismo TEXTO exacto. Un pedido armado
+// desde el catálogo de México puede traer una presentación genérica
+// ("Caja con 14 o 28 cápsulas de 75, 150 o 300 mg"), mientras que el
+// inventario real tiene una dosis específica y concreta (como la
+// cargada del papel, ej. "Blister 14tab 75mg") - con el match exacto de
+// antes, esos dos nunca coincidían aunque fueran la misma medicina.
+//
+// 1) Intenta el match exacto de siempre (más rápido, y preferido cuando
+//    ya coincide tal cual).
+// 2) Si no hay match exacto, busca por nombre + alguna dosis (mg) en
+//    común entre lo pedido y lo que hay en inventario.
+// 3) Si el pedido menciona VARIAS dosis posibles sin especificar cuál
+//    (el caso genérico de México) y el inventario tiene más de una en
+//    stock, se prefiere la dosis MÁS BAJA como opción conservadora -
+//    para no mezclar dosis distintas sin que nadie lo haya decidido.
+const resolverClave = (nombre, presentacion, stockPorClave) => {
+  const exacta = clave(nombre, presentacion);
+  if (stockPorClave.has(exacta)) return exacta;
+
+  const nombreNorm = normalizeSearchTerm(nombre || '');
+  const mgPedido = extraerMg(presentacion);
+  if (!nombreNorm || mgPedido.length === 0) return exacta;
+
+  const candidatas = [];
+  for (const [k, info] of stockPorClave.entries()) {
+    if (!k.startsWith(`${nombreNorm}||`)) continue;
+    const mgInventario = extraerMg(info.registros[0]?.presentacion || '');
+    if (mgInventario.some((mg) => mgPedido.includes(mg))) {
+      candidatas.push({ clave: k, mg: Math.min(...mgInventario) });
+    }
+  }
+  if (candidatas.length === 0) return exacta;
+  candidatas.sort((a, b) => a.mg - b.mg);
+  return candidatas[0].clave;
+};
+
 const registrarHistory = async (idMed, user, cantidad, nombreMed) => {
   try {
     await historyCreate({
@@ -65,7 +118,7 @@ export const ejecutarAutomatismoEntregas = async (nombreUsuario) => {
   const pedidoPorClave = new Map();
   for (const pedido of pedidosAuto) {
     for (const item of pedido.medicamentosSolicitados || []) {
-      const k = clave(item.nombre, item.presentacion);
+      const k = resolverClave(item.nombre, item.presentacion, stockPorClave);
       pedidoPorClave.set(k, (pedidoPorClave.get(k) || 0) + (item.cantidad || 0));
     }
   }
@@ -92,7 +145,7 @@ export const ejecutarAutomatismoEntregas = async (nombreUsuario) => {
       // Buscar un nombre legible para mostrar (de cualquier pedido que lo pidiera)
       for (const pedido of pedidosAuto) {
         const item = (pedido.medicamentosSolicitados || []).find(
-          (i) => clave(i.nombre, i.presentacion) === k
+          (i) => resolverClave(i.nombre, i.presentacion, stockPorClave) === k
         );
         if (item) {
           resumen.medicamentosSinStock.push(item.nombre);
@@ -125,7 +178,7 @@ export const ejecutarAutomatismoEntregas = async (nombreUsuario) => {
     try {
       const itemsEntrega = [];
       for (const item of pedido.medicamentosSolicitados || []) {
-        const k = clave(item.nombre, item.presentacion);
+        const k = resolverClave(item.nombre, item.presentacion, stockPorClave);
         const coeficiente = coeficientePorClave.get(k) || 0;
         const cantidadADar = coeficiente > 0 ? Math.floor(coeficiente * (item.cantidad || 0)) : 0;
 
@@ -139,10 +192,17 @@ export const ejecutarAutomatismoEntregas = async (nombreUsuario) => {
 
         if (cantidadADar <= 0) continue; // escenario A, o el redondeo lo dejó en 0
 
+        // Si el match fue por dosis (no exacto), usar la presentación REAL
+        // del inventario (específica) en la entrega, no el texto genérico
+        // del pedido - para que quien la reciba sepa exactamente qué es.
+        const stockInfoItem = stockPorClave.get(k);
+        const presentacionReal =
+          stockInfoItem?.registros?.[0]?.presentacion || item.presentacion || '';
+
         itemsEntrega.push({
           medicamentoId: null, // puede salir de varios lotes, no de uno solo
           nombre: item.nombre,
-          presentacion: item.presentacion || '',
+          presentacion: presentacionReal,
           cantidad: cantidadADar,
           ubicacion: item.ubicacion || '',
           fechaAgregado: new Date().toISOString(),

@@ -9,8 +9,7 @@ import {
   FlatList,
   TextInput,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
+  Keyboard,
 } from 'react-native';
 import { Search, X } from 'lucide-react-native';
 import { categoriasList } from '../services/LocalDataService';
@@ -23,6 +22,21 @@ export default function CategoriaPicker({
   showLabel = true,
 }) {
   const [modalVisible, setModalVisible] = useState(false);
+  // KeyboardAvoidingView no es confiable en Android cuando el modal está
+  // ABIERTO ENCIMA de otro modal ya visible (cada <Modal> es su propia
+  // ventana nativa, y el ajuste automático no siempre cruza esa frontera).
+  // Se escucha el teclado directamente y se empuja el contenido a mano.
+  const [alturaTeclado, setAlturaTeclado] = useState(0);
+  useEffect(() => {
+    const mostrar = Keyboard.addListener('keyboardDidShow', (e) =>
+      setAlturaTeclado(e.endCoordinates.height)
+    );
+    const ocultar = Keyboard.addListener('keyboardDidHide', () => setAlturaTeclado(0));
+    return () => {
+      mostrar.remove();
+      ocultar.remove();
+    };
+  }, []);
   const [searchTerm, setSearchTerm] = useState('');
   const [categorias, setCategorias] = useState([]);
   const [categoriasData, setCategoriasData] = useState([]); // Guardar objetos completos
@@ -77,10 +91,7 @@ export default function CategoriaPicker({
 
       <Modal visible={modalVisible} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView
-            style={styles.modalContent}
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          >
+          <View style={[styles.modalContent, { marginBottom: alturaTeclado }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Seleccionar Categoría</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
@@ -132,7 +143,7 @@ export default function CategoriaPicker({
                 }
               />
             )}
-          </KeyboardAvoidingView>
+          </View>
         </View>
       </Modal>
     </View>
