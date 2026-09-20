@@ -47,6 +47,23 @@ const extraerMg = (texto) => {
 //    (el caso genérico de México) y el inventario tiene más de una en
 //    stock, se prefiere la dosis MÁS BAJA como opción conservadora -
 //    para no mezclar dosis distintas sin que nadie lo haya decidido.
+// Resuelve a qué "producto" del inventario corresponde un ítem de pedido,
+// aunque su presentación no sea el mismo TEXTO exacto. Un pedido armado
+// desde el catálogo de México puede traer una presentación genérica
+// ("Caja con 14 o 28 cápsulas de 75, 150 o 300 mg"), mientras que el
+// inventario real tiene una dosis específica y concreta (como la
+// cargada del papel, ej. "Blister 14tab 75mg") - con el match exacto de
+// antes, esos dos nunca coincidían aunque fueran la misma medicina.
+//
+// 1) Intenta el match exacto de siempre (más rápido, y preferido cuando
+//    ya coincide tal cual).
+// 2) Si no hay match exacto, busca por nombre + alguna dosis (mg) en
+//    común entre lo pedido y lo que hay en inventario.
+// 3) Si el pedido menciona VARIAS dosis posibles sin especificar cuál
+//    (el caso genérico de México) y el inventario tiene más de una en
+//    stock, se prefiere la que tenga el lote con vencimiento MÁS
+//    PRÓXIMO - para usar primero lo que esté por vencer, en vez de
+//    dejarlo perderse mientras se reparte otra dosis.
 const resolverClave = (nombre, presentacion, stockPorClave) => {
   const exacta = clave(nombre, presentacion);
   if (stockPorClave.has(exacta)) return exacta;
@@ -60,11 +77,18 @@ const resolverClave = (nombre, presentacion, stockPorClave) => {
     if (!k.startsWith(`${nombreNorm}||`)) continue;
     const mgInventario = extraerMg(info.registros[0]?.presentacion || '');
     if (mgInventario.some((mg) => mgPedido.includes(mg))) {
-      candidatas.push({ clave: k, mg: Math.min(...mgInventario) });
+      // Vencimiento más próximo entre los lotes de este grupo (el más
+      // urgente de usar). Sin fecha = se manda al final, no se prioriza
+      // algo sin vencimiento conocido sobre algo que sí está por vencer.
+      const vencimientos = info.registros
+        .map((r) => r.vencimiento)
+        .filter(Boolean)
+        .sort();
+      candidatas.push({ clave: k, vencimientoMasProximo: vencimientos[0] || '9999-99-99' });
     }
   }
   if (candidatas.length === 0) return exacta;
-  candidatas.sort((a, b) => a.mg - b.mg);
+  candidatas.sort((a, b) => a.vencimientoMasProximo.localeCompare(b.vencimientoMasProximo));
   return candidatas[0].clave;
 };
 
