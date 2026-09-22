@@ -10,6 +10,7 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
+  Keyboard,
 } from 'react-native';
 import { Tag, Plus, MapPin, Trash2, X, Check, FileText, Download } from 'lucide-react-native';
 import * as Print from 'expo-print';
@@ -30,6 +31,17 @@ import UbicacionPicker from './UbicacionPicker';
 
 export default function CategoriasAdminModal({ visible, onClose }) {
   const insets = useSafeAreaInsets();
+  const [alturaTeclado, setAlturaTeclado] = useState(0);
+  useEffect(() => {
+    const mostrar = Keyboard.addListener('keyboardDidShow', (e) =>
+      setAlturaTeclado(e.endCoordinates.height)
+    );
+    const ocultar = Keyboard.addListener('keyboardDidHide', () => setAlturaTeclado(0));
+    return () => {
+      mostrar.remove();
+      ocultar.remove();
+    };
+  }, []);
   const [categorias, setCategorias] = useState([]);
   const [loading, setLoading] = useState(true);
   const [formVisible, setFormVisible] = useState(false);
@@ -323,7 +335,7 @@ export default function CategoriasAdminModal({ visible, onClose }) {
 
         <Modal visible={formVisible} animationType="slide" transparent>
           <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, { marginBottom: alturaTeclado }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>
                   {editando ? 'Editar categoría' : 'Nueva categoría'}

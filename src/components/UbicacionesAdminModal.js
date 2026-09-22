@@ -10,6 +10,7 @@ import {
   Modal,
   Alert,
   ActivityIndicator,
+  Keyboard,
 } from 'react-native';
 import { MapPin, Plus, Trash2, X, Check, Pencil } from 'lucide-react-native';
 import {
@@ -23,6 +24,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function UbicacionesAdminModal({ visible, onClose }) {
   const insets = useSafeAreaInsets();
+  const [alturaTeclado, setAlturaTeclado] = useState(0);
+  useEffect(() => {
+    const mostrar = Keyboard.addListener('keyboardDidShow', (e) =>
+      setAlturaTeclado(e.endCoordinates.height)
+    );
+    const ocultar = Keyboard.addListener('keyboardDidHide', () => setAlturaTeclado(0));
+    return () => {
+      mostrar.remove();
+      ocultar.remove();
+    };
+  }, []);
   const [ubicaciones, setUbicaciones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [formVisible, setFormVisible] = useState(false);
@@ -166,7 +178,7 @@ export default function UbicacionesAdminModal({ visible, onClose }) {
 
         <Modal visible={formVisible} transparent animationType="slide">
           <View style={styles.modalOverlay}>
-            <View style={[styles.modalContent, { paddingBottom: insets.bottom + 20 }]}>
+            <View style={[styles.modalContent, { paddingBottom: insets.bottom + 20, marginBottom: alturaTeclado }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>{editando ? 'Editar Ubicación' : 'Nueva Ubicación'}</Text>
                 <TouchableOpacity onPress={() => setFormVisible(false)}>
