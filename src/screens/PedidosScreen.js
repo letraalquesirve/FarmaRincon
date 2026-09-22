@@ -1072,23 +1072,9 @@ export default function PedidosScreen({ user }) {
             style={styles.flatList}
             renderItem={({ item }) => (
               <View style={styles.medicamentoItemSeleccion}>
-                {item.imagen ? (
-                  <TouchableOpacity onPress={() => openZoomModal(item.imagen, item.nombre)}>
-                    <Image
-                      source={{ uri: `data:image/jpeg;base64,${item.imagen}` }}
-                      style={styles.medImageThumb}
-                    />
-                  </TouchableOpacity>
-                ) : (
-                  <View style={styles.medImagePlaceholder}>
-                    <Package color="#9CA3AF" size={24} />
-                  </View>
-                )}
                 <View style={styles.medicamentoInfoSeleccion}>
                   <Text style={styles.medicamentoNombreSeleccion}>{item.nombre}</Text>
-                  <Text style={styles.medicamentoPresentacionSeleccion} numberOfLines={1}>
-                    {item.presentacion}
-                  </Text>
+                  <Text style={styles.medicamentoPresentacionSeleccion}>{item.presentacion}</Text>
                   {item.ubicacion && (
                     <Text style={styles.medicamentoUbicacionSeleccion} numberOfLines={1}>
                       📍 {item.ubicacion}
@@ -1690,7 +1676,7 @@ const styles = StyleSheet.create({
   },
   medicamentoInfoSeleccion: { flex: 1, flexShrink: 1 },
   medicamentoNombreSeleccion: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: 'bold',
     color: '#1F2937',
     marginBottom: 2,
