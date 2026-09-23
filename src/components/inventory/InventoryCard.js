@@ -7,6 +7,7 @@ import { getExpiryStatus, getDaysUntilExpiry, formatDate } from '../../utils/dat
 const getStatusBorderColor = (fecha, activo) => {
   if (!activo) return '#9CA3AF';
   const days = getDaysUntilExpiry(fecha);
+  if (days === null || isNaN(days)) return '#9CA3AF'; // Sin fecha registrada - gris neutro
   if (days < 0) return '#DC2626'; // VENCIDO - Rojo
   if (days <= 30) return '#EA580C'; // POR VENCER - Naranja
   return '#22C55E'; // VIGENTE - Verde
@@ -15,6 +16,7 @@ const getStatusBorderColor = (fecha, activo) => {
 const getStatusText = (fecha, activo) => {
   if (!activo) return 'INACTIVO';
   const days = getDaysUntilExpiry(fecha);
+  if (days === null || isNaN(days)) return 'Sin fecha'; // No confundir con "Vence en null días"
   if (days < 0) return 'VENCIDO';
   if (days <= 30) return `Vence en ${days} días`;
   return 'Vigente';
