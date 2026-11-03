@@ -1,5 +1,5 @@
 // src/components/UbicacionesAdminModal.js
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -21,6 +21,7 @@ import {
   ubicacionGetByNombre,
 } from '../services/LocalDataService';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { coincideFiltro } from '../utils/filtroTexto';
 
 export default function UbicacionesAdminModal({ visible, onClose }) {
   const insets = useSafeAreaInsets();
@@ -36,6 +37,11 @@ export default function UbicacionesAdminModal({ visible, onClose }) {
     };
   }, []);
   const [ubicaciones, setUbicaciones] = useState([]);
+  const [filtro, setFiltro] = useState('');
+  const ubicacionesFiltradas = useMemo(
+    () => ubicaciones.filter((c) => coincideFiltro(filtro, c.nombre)),
+    [ubicaciones, filtro]
+  );
   const [loading, setLoading] = useState(true);
   const [formVisible, setFormVisible] = useState(false);
   const [editando, setEditando] = useState(null); // null = crear, objeto = editar
@@ -130,7 +136,9 @@ export default function UbicacionesAdminModal({ visible, onClose }) {
         <View style={styles.header}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <MapPin color="#7C3AED" size={24} />
-            <Text style={styles.headerTitle}>Ubicaciones ({ubicaciones.length})</Text>
+            <Text style={styles.headerTitle}>
+              Ubicaciones ({filtro.trim() ? `${ubicacionesFiltradas.length} de ${ubicaciones.length}` : ubicaciones.length})
+            </Text>
           </View>
           <TouchableOpacity onPress={onClose}>
             <X color="#6B7280" size={26} />
@@ -143,11 +151,28 @@ export default function UbicacionesAdminModal({ visible, onClose }) {
           escribirla libremente.
         </Text>
 
+        <View style={styles.filtroContainer}>
+          <TextInput
+            style={styles.filtroInput}
+            value={filtro}
+            onChangeText={setFiltro}
+            placeholder="Filtrar ubicaciones..."
+            placeholderTextColor="#9CA3AF"
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {filtro.length > 0 && (
+            <TouchableOpacity onPress={() => setFiltro('')} style={styles.filtroLimpiar}>
+              <X color="#6B7280" size={18} />
+            </TouchableOpacity>
+          )}
+        </View>
+
         {loading ? (
           <ActivityIndicator size="large" color="#7C3AED" style={{ marginTop: 40 }} />
         ) : (
           <FlatList
-            data={ubicaciones}
+            data={ubicacionesFiltradas}
             keyExtractor={(item) => item.id}
             contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
             ListEmptyComponent={
@@ -214,6 +239,18 @@ export default function UbicacionesAdminModal({ visible, onClose }) {
 }
 
 const styles = StyleSheet.create({
+  filtroContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginTop: 8,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+  },
+  filtroInput: { flex: 1, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' },
+  filtroLimpiar: { padding: 10 },
   container: { flex: 1, backgroundColor: 'white' },
   header: {
     flexDirection: 'row',

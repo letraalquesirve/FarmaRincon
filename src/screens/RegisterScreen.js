@@ -647,11 +647,13 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
           // categorías en cada foto).
           const nombreDetectado = resultado.data.nombre || '';
           let categoriaFinal = '';
+          let avisoCategoria = '';
 
           if (nombreDetectado) {
             const encontrado = await buscarCategoriaLocal(nombreDetectado);
             if (encontrado) {
               categoriaFinal = encontrado.categoria;
+              avisoCategoria = encontrado.aviso || '';
             } else {
               const porIA = await pedirCategoriaAGemini(nombreDetectado);
               if (porIA) categoriaFinal = porIA;
@@ -668,6 +670,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
           });
           setStep('form');
           setProcessing(false);
+          if (avisoCategoria) Alert.alert('Revisa la ubicación', avisoCategoria);
           return true;
         }
 
@@ -988,23 +991,58 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
   // catálogo de México (traducida a categoría propia), luego en tu propio
   // inventario ya registrado. Devuelve null si ninguno la reconoce.
   const buscarCategoriaLocal = async (nombre) => {
-    // 1) Primero TU inventario: mismo nombre (o muy parecido) ya registrado.
-    const propio = await buscarCategoriaEnInventario(nombre);
-    if (propio) {
-      return {
-        categoria: propio.categoria,
-        mensaje: `(de tu inventario: "${propio.nombreParecido}")`,
-      };
-    }
-    // 2) Si no existe ahí, el catálogo de México.
+    // 1) Catálogo de México (traducido a las categorías del catálogo propio,
+    // que son las que tienen ubicación asignada).
     const matchMexico = await catalogoMexicoBuscar(nombre);
-    if (matchMexico?.categoria) {
-      return {
-        categoria: await traducirCategoriaMexico(matchMexico.categoria),
-        mensaje: `(del catálogo de México, por "${matchMexico.nombre}")`,
-      };
+    const catMexico = matchMexico?.categoria
+      ? await traducirCategoriaMexico(matchMexico.categoria)
+      : null;
+
+    // 2) Tu inventario (nombre igual o parecido).
+    const propio = await buscarCategoriaEnInventario(nombre);
+    const catPropia = propio?.categoria || null;
+
+    const msgMexico = `(del catálogo de México, por "${matchMexico?.nombre}")`;
+    const msgPropio = `(de tu inventario: "${propio?.nombreParecido}")`;
+
+    // Las dos existen y no coinciden: que decida el usuario.
+    if (catMexico && catPropia && normTxt(catMexico) !== normTxt(catPropia)) {
+      const eligio = await new Promise((resolve) => {
+        Alert.alert(
+          'Dos categorías posibles',
+          `"${nombre}"\n\nMéxico: ${catMexico}\nTu inventario: ${catPropia}\n\n¿Cuál usar?`,
+          [
+            { text: 'México', onPress: () => resolve('mexico') },
+            { text: 'Mi inventario', onPress: () => resolve('propio') },
+          ],
+          { cancelable: false }
+        );
+      });
+      if (eligio === 'propio') return await armarResultadoPropio(catPropia, msgPropio);
+      return { categoria: catMexico, mensaje: msgMexico };
     }
+
+    if (catMexico) return { categoria: catMexico, mensaje: msgMexico };
+    if (catPropia) return await armarResultadoPropio(catPropia, msgPropio);
     return null;
+  };
+
+  // Una categoría que solo salió del inventario puede no estar en el catálogo
+  // de categorías: entonces no tiene ubicación y hay que avisar.
+  const armarResultadoPropio = async (categoria, mensaje) => {
+    let enCatalogo = null;
+    try {
+      enCatalogo = await categoriaGetByNombre(categoria);
+    } catch (e) {
+      enCatalogo = null;
+    }
+    return {
+      categoria,
+      mensaje,
+      aviso: enCatalogo
+        ? ''
+        : `La categoría "${categoria}" salió de tu inventario y no está en el catálogo de categorías, por eso la Ubicación quedó en blanco. Ajústala a mano.`,
+    };
   };
 
   // Le pregunta a Gemini SOLO la categoría (texto, barato) - se usa nada
@@ -1084,7 +1122,13 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
-  const fvCorto = (v) => (v || '').toString().split('T')[0];
+  // Quedarse con AAAA-MM-DD: las fechas pueden venir como "2026-03-01T00:00:00Z"
+  // o "2026-03-01 00:00:00.000Z" (carga del papel).
+  const fvCorto = (v) => {
+    const t = (v || '').toString().trim();
+    const m = t.match(/^\d{4}-\d{2}-\d{2}/);
+    return m ? m[0] : t;
+  };
   const fvBonito = (v) => {
     const c = fvCorto(v);
     if (!c) return 'Sin FV';
@@ -1214,11 +1258,13 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
                 !habilitada && { opacity: 0.4 },
               ]}
             >
-              <Text style={styles.avisoDuplicadoItem} numberOfLines={3}>
+              <Text style={styles.avisoDuplicadoItem}>
                 {elegida ? '✔ ' : '• '}
                 {m.nombre}
-                {m.presentacion ? ` — ${m.presentacion}` : ''} · FV: {fvBonito(m.vencimiento)} ·{' '}
-                {m.cantidad ?? 0} u.
+                {m.presentacion ? ` — ${m.presentacion}` : ''}
+              </Text>
+              <Text style={styles.avisoDuplicadoDetalle}>
+                FV: {fvBonito(m.vencimiento)} · {m.cantidad ?? 0} u.
                 {m.activo === false ? ' · INACTIVO' : ''}
               </Text>
             </TouchableOpacity>
@@ -1264,6 +1310,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
     const encontrado = await buscarCategoriaLocal(nombreActual);
     if (encontrado) {
       await aplicar(encontrado.categoria);
+      if (encontrado.aviso) Alert.alert('Revisa la ubicación', encontrado.aviso);
       return;
     }
 
@@ -1334,7 +1381,10 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
       // 1) México y tu propio inventario, sin gastar ni una llamada a la IA
       const encontrado = await buscarCategoriaLocal(nombreMedicamento);
       if (encontrado) {
-        await aplicarCategoria(encontrado.categoria, encontrado.mensaje);
+        const textoMensaje = encontrado.aviso
+          ? `${encontrado.mensaje}\n\n${encontrado.aviso}`
+          : encontrado.mensaje;
+        await aplicarCategoria(encontrado.categoria, textoMensaje);
         return;
       }
 
@@ -1576,7 +1626,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
                     <Text style={styles.ultimoUbicacion}>📍 {ultimoMedicamento.ubicacion}</Text>
                   )}
                   <Text style={styles.ultimoUser}>
-                    👤 Registrado por: {ultimoMedicamento.username || 'usuario'}
+                    👤 Registrado por: {ultimoMedicamento.userName || ultimoMedicamento.username || 'usuario'}
                   </Text>
                 </View>
                 {ultimoMedicamento.imagen && (
@@ -1948,6 +1998,7 @@ const styles = StyleSheet.create({
   avisoDuplicadoFila: { paddingVertical: 6, paddingHorizontal: 6, borderRadius: 6, marginBottom: 2 },
   avisoDuplicadoFilaElegida: { backgroundColor: '#FDE68A', borderWidth: 1, borderColor: '#D97706' },
   avisoDuplicadoExplica: { fontSize: 12, fontWeight: '700', color: '#78350F', marginTop: 6 },
+  avisoDuplicadoDetalle: { fontSize: 12, fontWeight: '700', color: '#92400E', marginLeft: 12 },
   avisoDuplicadoItem: { fontSize: 12, color: '#78350F', marginBottom: 2 },
   avisoDuplicadoPie: { fontSize: 11, color: '#92400E', marginTop: 4, fontStyle: 'italic' },
   label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 5 },

@@ -1,5 +1,5 @@
 // src/components/CategoriasAdminModal.js
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ import {
 } from '../services/LocalDataService';
 import { normalizeSearchTerm } from '../utils/normalizeText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { coincideFiltro } from '../utils/filtroTexto';
 import CatalogoMexicoModal from './CatalogoMexicoModal';
 import UbicacionPicker from './UbicacionPicker';
 
@@ -43,6 +44,11 @@ export default function CategoriasAdminModal({ visible, onClose }) {
     };
   }, []);
   const [categorias, setCategorias] = useState([]);
+  const [filtro, setFiltro] = useState('');
+  const categoriasFiltradas = useMemo(
+    () => categorias.filter((c) => coincideFiltro(filtro, c.nombre, c.ubicacion)),
+    [categorias, filtro]
+  );
   const [loading, setLoading] = useState(true);
   const [formVisible, setFormVisible] = useState(false);
   const [editando, setEditando] = useState(null); // null = crear, objeto = editar
@@ -288,7 +294,9 @@ export default function CategoriasAdminModal({ visible, onClose }) {
         <View style={styles.header}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <Tag color="#7C3AED" size={24} />
-            <Text style={styles.headerTitle}>Categorías ({categorias.length})</Text>
+            <Text style={styles.headerTitle}>
+              Categorías ({filtro.trim() ? `${categoriasFiltradas.length} de ${categorias.length}` : categorias.length})
+            </Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
             <TouchableOpacity onPress={() => setCatalogoMexicoVisible(true)}>
@@ -312,11 +320,28 @@ export default function CategoriasAdminModal({ visible, onClose }) {
           sugerir el lugar al registrar un medicamento nuevo.
         </Text>
 
+        <View style={styles.filtroContainer}>
+          <TextInput
+            style={styles.filtroInput}
+            value={filtro}
+            onChangeText={setFiltro}
+            placeholder="Filtrar por nombre o ubicación..."
+            placeholderTextColor="#9CA3AF"
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {filtro.length > 0 && (
+            <TouchableOpacity onPress={() => setFiltro('')} style={styles.filtroLimpiar}>
+              <X color="#6B7280" size={18} />
+            </TouchableOpacity>
+          )}
+        </View>
+
         {loading ? (
           <ActivityIndicator size="large" color="#7C3AED" style={{ marginTop: 40 }} />
         ) : (
           <FlatList
-            data={categorias}
+            data={categoriasFiltradas}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
             contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
@@ -389,6 +414,18 @@ export default function CategoriasAdminModal({ visible, onClose }) {
 }
 
 const styles = StyleSheet.create({
+  filtroContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginTop: 8,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+  },
+  filtroInput: { flex: 1, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111827' },
+  filtroLimpiar: { padding: 10 },
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   header: {
     flexDirection: 'row',

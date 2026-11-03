@@ -826,7 +826,7 @@ export default function InventoryScreen({ user }) {
               <View style={styles.detailRow}>
                 <User color="#7C3AED" size={15} />
                 <Text style={styles.detailLabel}>Registrado por:</Text>
-                <Text style={styles.detailValue}>{selectedMed?.username || 'usuario'}</Text>
+                <Text style={styles.detailValue}>{selectedMed?.userName || selectedMed?.username || 'usuario'}</Text>
               </View>
 
               {selectedMed?.imagen && (
