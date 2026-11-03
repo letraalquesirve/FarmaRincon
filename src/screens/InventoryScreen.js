@@ -5,6 +5,7 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  FlatList,
   TouchableOpacity,
   Alert,
   RefreshControl,
@@ -32,7 +33,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
-  medicamentosList,
+  medicamentosListLiviano,
   medicamentoGetOne,
   medicamentoUpdate,
   medicamentoCreate,
@@ -126,7 +127,7 @@ export default function InventoryScreen({ user }) {
         // Antes esto armaba un filtro de PocketBase contra la vista 'searck_key'.
         // Ahora todo vive local: traemos los medicamentos (activos o inactivos)
         // de SQLite y filtramos en JS, que con datos locales es instantáneo.
-        let items = await medicamentosList(!modoInactivos);
+        let items = await medicamentosListLiviano(!modoInactivos);
 
         // 2. Filtro de búsqueda por texto (mismo criterio: todas las palabras deben aparecer)
         if (termino && termino.trim() !== '') {
@@ -687,6 +688,18 @@ export default function InventoryScreen({ user }) {
     }
   };
 
+  // La lista viene sin la foto/audio (pesados); al abrir un medicamento se
+  // pide la fila completa para el detalle, la edición y la imagen.
+  const abrirDetalle = useCallback(async (medicamento) => {
+    try {
+      const completo = await medicamentoGetOne(medicamento.id);
+      setSelectedMed(completo || medicamento);
+    } catch (error) {
+      setSelectedMed(medicamento);
+    }
+    setDetailModalVisible(true);
+  }, []);
+
   // ── Render ──
   return (
     <View style={styles.container}>
@@ -703,54 +716,56 @@ export default function InventoryScreen({ user }) {
         setShowFilters={setShowFilters}
       />
 
-      <ScrollView
-        style={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#7C3AED" />
-            <Text style={styles.loadingText}>Buscando medicamentos...</Text>
-          </View>
-        ) : resultados.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Package color="#D1D5DB" size={64} />
-            <Text style={styles.emptyTitle}>No hay medicamentos</Text>
-            <Text style={styles.emptyText}>
-              {searchInputValue
-                ? 'No se encontraron resultados'
-                : `No hay ${modoInactivos ? 'medicamentos inactivos' : 'medicamentos'} para mostrar`}
-            </Text>
-          </View>
-        ) : (
-          <>
-            <View style={styles.resultsHeader}>
-              <Text style={styles.resultsText}>
-                {resultados.length} {resultados.length === 1 ? 'medicamento' : 'medicamentos'}{' '}
-                encontrados
+      {loading ? (
+        <View style={[styles.content, styles.loadingContainer]}>
+          <ActivityIndicator size="large" color="#7C3AED" />
+          <Text style={styles.loadingText}>Buscando medicamentos...</Text>
+        </View>
+      ) : (
+        // FlatList en vez de ScrollView + map: solo dibuja las filas visibles
+        // (antes, con cientos de inactivos, se montaban todas de golpe y los
+        // teléfonos modestos se trababan).
+        <FlatList
+          style={styles.content}
+          data={resultados}
+          keyExtractor={(med) => med.id}
+          initialNumToRender={12}
+          maxToRenderPerBatch={10}
+          windowSize={7}
+          removeClippedSubviews
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Package color="#D1D5DB" size={64} />
+              <Text style={styles.emptyTitle}>No hay medicamentos</Text>
+              <Text style={styles.emptyText}>
+                {searchInputValue
+                  ? 'No se encontraron resultados'
+                  : `No hay ${modoInactivos ? 'medicamentos inactivos' : 'medicamentos'} para mostrar`}
               </Text>
-              <LoadingButton
-                onPress={generatePDF}
-                loading={generatingPDF}
-                title="PDF"
-                style={styles.pdfButton}
-                textStyle={styles.pdfButtonText}
-                loadingText="Generando..."
-              />
             </View>
-            {resultados.map((med) => (
-              <InventoryCard
-                key={med.id}
-                med={med}
-                onPress={(medicamento) => {
-                  setSelectedMed(medicamento);
-                  setDetailModalVisible(true);
-                }}
-              />
-            ))}
-          </>
-        )}
-      </ScrollView>
+          }
+          ListHeaderComponent={
+            resultados.length > 0 ? (
+              <View style={styles.resultsHeader}>
+                <Text style={styles.resultsText}>
+                  {resultados.length} {resultados.length === 1 ? 'medicamento' : 'medicamentos'}{' '}
+                  encontrados
+                </Text>
+                <LoadingButton
+                  onPress={generatePDF}
+                  loading={generatingPDF}
+                  title="PDF"
+                  style={styles.pdfButton}
+                  textStyle={styles.pdfButtonText}
+                  loadingText="Generando..."
+                />
+              </View>
+            ) : null
+          }
+          renderItem={({ item }) => <InventoryCard med={item} onPress={abrirDetalle} />}
+        />
+      )}
 
       {/* Modales - mantener el mismo código de antes */}
       <Modal

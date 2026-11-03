@@ -283,6 +283,27 @@ export const getAllMedicamentos = async (activo = null) => {
   return rows.map(normalizeMedicamento);
 };
 
+// Lista SIN las columnas pesadas (imagen/audio en base64, a veces varios MB
+// por fila). Para pantallas de lista: en teléfonos modestos cargar todo con
+// SELECT * era lo que volvía lenta la vista de inactivos. El detalle pide la
+// fila completa con getMedicamentoById al abrir un medicamento.
+export const getAllMedicamentosLiviano = async (activo = null) => {
+  const dbInstance = await getDb();
+  let query = `SELECT id, nombre, presentacion, categoria, cantidad, vencimiento,
+    fechaRegistro, activo, fechaBaja, userName, userId, ubicacion, fechaEdicion,
+    editadoPor, fechaReactivacion, reactivadoPor, updated,
+    (imagen IS NOT NULL AND imagen != '') AS tieneImagen
+    FROM medicamentos`;
+  const params = [];
+  if (activo !== null) {
+    query += ' WHERE activo = ?';
+    params.push(activo ? 1 : 0);
+  }
+  query += ' ORDER BY fechaRegistro DESC';
+  const rows = await dbInstance.getAllAsync(query, params);
+  return rows.map(normalizeMedicamento);
+};
+
 export const getMedicamentoById = async (id) => {
   const dbInstance = await getDb();
   const row = await dbInstance.getFirstAsync('SELECT * FROM medicamentos WHERE id = ?', [id]);
@@ -810,25 +831,49 @@ export const reemplazarCatalogoMexico = async (filas) => {
 // mayúsculas). Devuelve el primer match con categoría no vacía, o null.
 export const buscarEnCatalogoMexico = async (nombreBuscado) => {
   const dbInstance = await getDb();
-  const normalizado = nombreBuscado
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim();
+  const norm = (t) =>
+    (t || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+  const normalizado = norm(nombreBuscado);
   if (!normalizado) return null;
 
   const candidatos = await dbInstance.getAllAsync(
     `SELECT nombre, generico, presentacion, categoria FROM catalogo_mexico WHERE categoria != ''`
   );
-  for (const c of candidatos) {
-    const nombreNorm = (c.nombre || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-    if (nombreNorm.includes(normalizado) || normalizado.includes(nombreNorm)) {
-      return c;
+
+  // Categoría más frecuente entre los candidatos (un mismo genérico aparece
+  // muchas veces, una por marca/presentación; gana la que más se repite).
+  const masFrecuente = (lista) => {
+    const cuenta = new Map();
+    for (const c of lista) cuenta.set(c.categoria, (cuenta.get(c.categoria) || 0) + 1);
+    let mejor = null;
+    let max = 0;
+    for (const [cat, n] of cuenta) {
+      if (n > max) {
+        max = n;
+        mejor = cat;
+      }
     }
-  }
+    return lista.find((c) => c.categoria === mejor) || null;
+  };
+
+  // 1) Nombre IGUAL (sin acentos/mayúsculas). Es lo más fiable.
+  const exactos = candidatos.filter((c) => norm(c.nombre) === normalizado);
+  if (exactos.length) return masFrecuente(exactos);
+
+  // 2) Nombre contenido, pero solo contra fármacos de UN ingrediente: un
+  // combinado ("AMPICILINA / METAMIZOL / ...") no debe decidir la categoría
+  // de la Ampicilina sola. Se ignoran nombres de catálogo muy cortos.
+  const simples = candidatos.filter((c) => {
+    const n = norm(c.nombre);
+    if (n.length < 5 || n.includes('/')) return false;
+    return n.includes(normalizado) || normalizado.includes(n);
+  });
+  if (simples.length) return masFrecuente(simples);
+
   return null;
 };
 

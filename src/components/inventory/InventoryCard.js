@@ -22,7 +22,7 @@ const getStatusText = (fecha, activo) => {
   return 'Vigente';
 };
 
-export const InventoryCard = ({ med, onPress }) => {
+const InventoryCardBase = ({ med, onPress }) => {
   const isInactivo = med.activo === false;
   const borderColor = getStatusBorderColor(med.vencimiento, !isInactivo);
   const statusText = getStatusText(med.vencimiento, !isInactivo);
@@ -61,6 +61,9 @@ export const InventoryCard = ({ med, onPress }) => {
     </TouchableOpacity>
   );
 };
+
+// React.memo: evita redibujar todas las tarjetas al cambiar el estado de la pantalla.
+export const InventoryCard = React.memo(InventoryCardBase);
 
 const styles = StyleSheet.create({
   card: {

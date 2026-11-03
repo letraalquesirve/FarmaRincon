@@ -19,6 +19,10 @@ export const medicamentosList = async (activo = null) => {
   return await SQLite.getAllMedicamentos(activo);
 };
 
+export const medicamentosListLiviano = async (activo = null) => {
+  return await SQLite.getAllMedicamentosLiviano(activo);
+};
+
 export const medicamentoGetOne = async (id) => {
   return await SQLite.getMedicamentoById(id);
 };

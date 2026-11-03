@@ -50,7 +50,11 @@ import {
   traducirCategoriaMexico,
   catalogoMexicoCategoriasDisponibles,
 } from '../services/LocalDataService';
-import { buscarCategoriaPorNombreParecido } from '../utils/categoriaSimilar';
+import {
+  buscarCategoriaPorNombreParecido,
+  buscarCategoriaEnInventario,
+  buscarCoincidenciasNombre,
+} from '../utils/categoriaSimilar';
 
 export default function RegisterScreen({ user }) {
   // ==================== ESTADOS PRINCIPALES ====================
@@ -62,6 +66,10 @@ export default function RegisterScreen({ user }) {
   const [mensajeReintentoIA, setMensajeReintentoIA] = useState('');
   const [checkingDuplicate, setCheckingDuplicate] = useState(false);
   const [duplicateFound, setDuplicateFound] = useState(null);
+  // Avisos "ya existe algo parecido" mientras se escribe el nombre (formulario
+  // de foto y manual), para no duplicar sin querer.
+  const [coincidenciasFoto, setCoincidenciasFoto] = useState([]);
+  const [coincidenciasManual, setCoincidenciasManual] = useState([]);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [consultandoCategoria, setConsultandoCategoria] = useState(false);
@@ -938,18 +946,20 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
   // catálogo de México (traducida a categoría propia), luego en tu propio
   // inventario ya registrado. Devuelve null si ninguno la reconoce.
   const buscarCategoriaLocal = async (nombre) => {
+    // 1) Primero TU inventario: mismo nombre (o muy parecido) ya registrado.
+    const propio = await buscarCategoriaEnInventario(nombre);
+    if (propio) {
+      return {
+        categoria: propio.categoria,
+        mensaje: `(de tu inventario: "${propio.nombreParecido}")`,
+      };
+    }
+    // 2) Si no existe ahí, el catálogo de México.
     const matchMexico = await catalogoMexicoBuscar(nombre);
     if (matchMexico?.categoria) {
       return {
         categoria: await traducirCategoriaMexico(matchMexico.categoria),
         mensaje: `(del catálogo de México, por "${matchMexico.nombre}")`,
-      };
-    }
-    const parecido = await buscarCategoriaPorNombreParecido(nombre);
-    if (parecido) {
-      return {
-        categoria: parecido.categoria,
-        mensaje: `(nombre parecido en tu inventario: "${parecido.nombreParecido}")`,
       };
     }
     return null;
@@ -995,6 +1005,54 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
       }
       return null;
     }
+  };
+
+  // Búsqueda de posibles duplicados al escribir el nombre (con pausa para no
+  // consultar en cada tecla).
+  useEffect(() => {
+    let cancelado = false;
+    const t = setTimeout(async () => {
+      const r = await buscarCoincidenciasNombre(formData.nombre);
+      if (!cancelado) setCoincidenciasFoto(r);
+    }, 400);
+    return () => {
+      cancelado = true;
+      clearTimeout(t);
+    };
+  }, [formData.nombre]);
+
+  useEffect(() => {
+    let cancelado = false;
+    const t = setTimeout(async () => {
+      const r = await buscarCoincidenciasNombre(manualFormData.nombre);
+      if (!cancelado) setCoincidenciasManual(r);
+    }, 400);
+    return () => {
+      cancelado = true;
+      clearTimeout(t);
+    };
+  }, [manualFormData.nombre]);
+
+  const renderCoincidencias = (lista) => {
+    if (!lista || lista.length === 0) return null;
+    return (
+      <View style={styles.avisoDuplicado}>
+        <Text style={styles.avisoDuplicadoTitulo}>
+          Ya hay {lista.length === 1 ? 'un medicamento parecido' : 'medicamentos parecidos'} en el
+          inventario:
+        </Text>
+        {lista.map((m) => (
+          <Text key={m.id} style={styles.avisoDuplicadoItem} numberOfLines={2}>
+            • {m.nombre}
+            {m.presentacion ? ` — ${m.presentacion}` : ''} ({m.cantidad ?? 0} u.
+            {m.activo === false ? ', INACTIVO' : ''})
+          </Text>
+        ))}
+        <Text style={styles.avisoDuplicadoPie}>
+          Si es el mismo con otra cantidad, edítalo o reactívalo en vez de crear uno nuevo.
+        </Text>
+      </View>
+    );
   };
 
   const sugerirCategoriaAlSalirDelNombre = async (esManual) => {
@@ -1187,6 +1245,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
               </TouchableOpacity>
             </View>
           </View>
+          {renderCoincidencias(coincidenciasFoto)}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Presentación</Text>
             <TextInput
@@ -1464,6 +1523,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
                   </TouchableOpacity>
                 </View>
 
+                {renderCoincidencias(coincidenciasManual)}
                 <Text style={styles.label}>Presentación</Text>
                 <TextInput
                   style={styles.input}
@@ -1687,6 +1747,17 @@ const styles = StyleSheet.create({
   previewImageSmall: { width: '100%', height: 180, resizeMode: 'cover' },
   form: { padding: 20 },
   inputGroup: { marginBottom: 20 },
+  avisoDuplicado: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#F59E0B',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 16,
+  },
+  avisoDuplicadoTitulo: { fontSize: 13, fontWeight: '700', color: '#92400E', marginBottom: 4 },
+  avisoDuplicadoItem: { fontSize: 12, color: '#78350F', marginBottom: 2 },
+  avisoDuplicadoPie: { fontSize: 11, color: '#92400E', marginTop: 4, fontStyle: 'italic' },
   label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 5 },
   input: {
     backgroundColor: 'white',
