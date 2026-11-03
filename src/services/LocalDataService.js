@@ -42,7 +42,36 @@ export const medicamentoUpdate = async (id, data) => {
   const existing = await SQLite.getMedicamentoById(id);
   if (!existing) throw new Error(`Medicamento ${id} no encontrado`);
   const merged = { ...existing, ...data, id };
+
+  // Si el cambio deja la cantidad en 0 (entregas, automatismo de reparto,
+  // edición), el medicamento pasa solo a inactivos. No aplica si la misma
+  // llamada lo está activando a propósito (data.activo === true).
+  const quedoEnCero =
+    data.cantidad !== undefined &&
+    Number(merged.cantidad) <= 0 &&
+    existing.activo !== false &&
+    data.activo !== true;
+  if (quedoEnCero) {
+    merged.activo = false;
+    merged.fechaBaja = new Date().toISOString();
+  }
+
   await SQLite.saveMedicamento(merged);
+
+  if (quedoEnCero) {
+    try {
+      await historyCreate({
+        id_med: id,
+        fecha: merged.fechaBaja,
+        user: data.editadoPor || 'Sistema',
+        movimiento: 'Desactivando',
+        cantidad: 0,
+        nombre: merged.nombre,
+      });
+    } catch (error) {
+      console.error('Error registrando desactivación automática:', error);
+    }
+  }
   return merged;
 };
 

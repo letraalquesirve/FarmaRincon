@@ -44,6 +44,7 @@ import {
   medicamentosList,
   medicamentoCreate,
   medicamentoUpdate,
+  medicamentoGetOne,
   historyCreate,
   categoriaGetByNombre,
   catalogoMexicoBuscar,
@@ -70,6 +71,10 @@ export default function RegisterScreen({ user }) {
   // de foto y manual), para no duplicar sin querer.
   const [coincidenciasFoto, setCoincidenciasFoto] = useState([]);
   const [coincidenciasManual, setCoincidenciasManual] = useState([]);
+  // Medicamento ya existente elegido por el usuario para sumarle la cantidad
+  // nueva (reabastecimiento) en vez de crear un registro nuevo.
+  const [fusionFoto, setFusionFoto] = useState(null);
+  const [fusionManual, setFusionManual] = useState(null);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [consultandoCategoria, setConsultandoCategoria] = useState(false);
@@ -752,8 +757,23 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
       Alert.alert('Error', 'Ingresa una cantidad válida');
       return;
     }
-    if (!manualFormData.vencimiento) {
+    const fusionM = fusionVigente(fusionManual, manualFormData) ? fusionManual : null;
+    if (!manualFormData.vencimiento && !fusionM) {
       Alert.alert('Error', 'La fecha de vencimiento es obligatoria');
+      return;
+    }
+
+    // Reabastecimiento: solo se suma la cantidad al medicamento elegido.
+    if (fusionM) {
+      setIsSaving(true);
+      try {
+        await fusionarConExistente(fusionM, parseInt(manualFormData.cantidad, 10), true);
+      } catch (error) {
+        console.error('Error sumando cantidad:', error);
+        Alert.alert('Error', error.message || 'No se pudo sumar la cantidad');
+      } finally {
+        setIsSaving(false);
+      }
       return;
     }
 
@@ -841,6 +861,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
 
   const resetForm = () => {
     setStep('capture');
+    setFusionFoto(null);
     setImageUri(null);
     setImageBase64(null);
     imageBase64Ref.current = null;
@@ -856,8 +877,28 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
 
   const handleSaveNewMed = async () => {
     if (isSaving || comprimiendo) return;
-    if (!formData.nombre || !formData.cantidad || !formData.vencimiento) {
+    const fusionF = fusionVigente(fusionFoto, formData) ? fusionFoto : null;
+    if (!formData.nombre || !formData.cantidad || (!formData.vencimiento && !fusionF)) {
       Alert.alert('Error', 'Completa los campos obligatorios');
+      return;
+    }
+
+    // Reabastecimiento: solo se suma la cantidad al medicamento elegido.
+    if (fusionF) {
+      const cantidadF = parseInt(formData.cantidad, 10);
+      if (isNaN(cantidadF) || cantidadF <= 0) {
+        Alert.alert('Error', 'Ingresa una cantidad válida');
+        return;
+      }
+      setIsSaving(true);
+      try {
+        await fusionarConExistente(fusionF, cantidadF, false);
+      } catch (error) {
+        console.error('Error sumando cantidad:', error);
+        Alert.alert('Error', error.message || 'No se pudo sumar la cantidad');
+      } finally {
+        setIsSaving(false);
+      }
       return;
     }
 
@@ -889,8 +930,9 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
             { text: 'Cancelar', style: 'cancel' },
           ]);
         } else {
-          setDuplicateFound(duplicate);
-          setShowDuplicateModal(true);
+          // Mismo nombre y presentación ya activo, pero el usuario no lo eligió
+          // para sumarle cantidad: se guarda como registro nuevo (otro lote).
+          await saveNewMedicamento(medData);
         }
       } else {
         await saveNewMedicamento(medData);
@@ -1012,7 +1054,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
   useEffect(() => {
     let cancelado = false;
     const t = setTimeout(async () => {
-      const r = await buscarCoincidenciasNombre(formData.nombre);
+      const r = await buscarCoincidenciasNombre(formData.nombre, 8);
       if (!cancelado) setCoincidenciasFoto(r);
     }, 400);
     return () => {
@@ -1024,7 +1066,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
   useEffect(() => {
     let cancelado = false;
     const t = setTimeout(async () => {
-      const r = await buscarCoincidenciasNombre(manualFormData.nombre);
+      const r = await buscarCoincidenciasNombre(manualFormData.nombre, 8);
       if (!cancelado) setCoincidenciasManual(r);
     }, 400);
     return () => {
@@ -1033,24 +1075,170 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
     };
   }, [manualFormData.nombre]);
 
-  const renderCoincidencias = (lista) => {
+  // ── Reabastecimiento: elegir un medicamento existente y sumarle cantidad ──
+  const normTxt = (t) =>
+    (t || '')
+      .toString()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const fvCorto = (v) => (v || '').toString().split('T')[0];
+  const fvBonito = (v) => {
+    const c = fvCorto(v);
+    if (!c) return 'Sin FV';
+    const [a, m, d] = c.split('-');
+    return d && m && a ? `${d}/${m}/${a}` : c;
+  };
+
+  // Una fila se puede elegir si no contradice lo que el usuario ya escribió
+  // (presentación o FV). Lo que aún está vacío no la descarta.
+  const filaCoincide = (m, form) => {
+    if (form.presentacion?.trim() && normTxt(form.presentacion) !== normTxt(m.presentacion))
+      return false;
+    if (fvCorto(form.vencimiento) && fvCorto(form.vencimiento) !== fvCorto(m.vencimiento))
+      return false;
+    return true;
+  };
+
+  // La fusión solo vale mientras nombre, presentación y FV del formulario
+  // sigan siendo idénticos a los del elegido (si el usuario cambia uno, deja
+  // de ser "el mismo medicamento" y se guarda como nuevo).
+  const fusionVigente = (fusion, form) =>
+    !!fusion &&
+    normTxt(form.nombre) === normTxt(fusion.nombre) &&
+    normTxt(form.presentacion) === normTxt(fusion.presentacion) &&
+    fvCorto(form.vencimiento) === fvCorto(fusion.vencimiento);
+
+  const alternarFusion = (m, esManual) => {
+    const actual = esManual ? fusionManual : fusionFoto;
+    const setFusion = esManual ? setFusionManual : setFusionFoto;
+    const setForm = esManual ? setManualFormData : setFormData;
+    if (actual?.id === m.id) {
+      setFusion(null);
+      return;
+    }
+    setFusion({
+      id: m.id,
+      nombre: m.nombre,
+      presentacion: m.presentacion || '',
+      vencimiento: fvCorto(m.vencimiento),
+      cantidad: Number(m.cantidad) || 0,
+      activo: m.activo !== false,
+    });
+    setForm((prev) => ({
+      ...prev,
+      nombre: m.nombre,
+      presentacion: m.presentacion || '',
+      vencimiento: fvCorto(m.vencimiento),
+      categoria: m.categoria || prev.categoria,
+      ubicacion: m.ubicacion || prev.ubicacion,
+    }));
+  };
+
+  const fusionarConExistente = async (fusion, cantidadNueva, esManual) => {
+    const actual = await medicamentoGetOne(fusion.id);
+    if (!actual) throw new Error('El medicamento elegido ya no existe');
+    const inactivo = actual.activo === false;
+    const anterior = Number(actual.cantidad) || 0;
+    const total = inactivo ? cantidadNueva : anterior + cantidadNueva;
+    const ahora = new Date().toISOString();
+    const usuario = getUserName();
+
+    await medicamentoUpdate(
+      fusion.id,
+      inactivo
+        ? {
+            activo: true,
+            cantidad: total,
+            fechaBaja: null,
+            fechaReactivacion: ahora,
+            reactivadoPor: usuario,
+          }
+        : { cantidad: total, fechaEdicion: ahora, editadoPor: usuario }
+    );
+    await registrarHistory(
+      fusion.id,
+      ahora,
+      usuario,
+      inactivo ? 'Reactivando' : 'Añadiendo',
+      cantidadNueva,
+      actual.nombre
+    );
+    await cargarUltimoMedicamento();
+
+    const cerrar = () => {
+      if (esManual) {
+        setFusionManual(null);
+        cerrarModalManual();
+      } else {
+        setFusionFoto(null);
+        resetForm();
+      }
+    };
+    Alert.alert(
+      'Éxito',
+      inactivo
+        ? `${actual.nombre} reactivado con ${total} unidades.`
+        : `${actual.nombre}: ${anterior} + ${cantidadNueva} = ${total} unidades.`,
+      [{ text: 'OK', onPress: cerrar }]
+    );
+  };
+
+  const renderCoincidencias = (lista, esManual) => {
     if (!lista || lista.length === 0) return null;
+    const form = esManual ? manualFormData : formData;
+    const fusion = esManual ? fusionManual : fusionFoto;
+    const vigente = fusionVigente(fusion, form);
+    const cantNueva = parseInt(form.cantidad, 10);
+    const cantValida = !isNaN(cantNueva) && cantNueva > 0;
+
     return (
       <View style={styles.avisoDuplicado}>
         <Text style={styles.avisoDuplicadoTitulo}>
           Ya hay {lista.length === 1 ? 'un medicamento parecido' : 'medicamentos parecidos'} en el
-          inventario:
+          inventario. Toca el que acaba de llegar para sumarle la cantidad:
         </Text>
-        {lista.map((m) => (
-          <Text key={m.id} style={styles.avisoDuplicadoItem} numberOfLines={2}>
-            • {m.nombre}
-            {m.presentacion ? ` — ${m.presentacion}` : ''} ({m.cantidad ?? 0} u.
-            {m.activo === false ? ', INACTIVO' : ''})
+        {lista.map((m) => {
+          const habilitada = filaCoincide(m, form);
+          const elegida = vigente && fusion?.id === m.id;
+          return (
+            <TouchableOpacity
+              key={m.id}
+              disabled={!habilitada}
+              onPress={() => alternarFusion(m, esManual)}
+              style={[
+                styles.avisoDuplicadoFila,
+                elegida && styles.avisoDuplicadoFilaElegida,
+                !habilitada && { opacity: 0.4 },
+              ]}
+            >
+              <Text style={styles.avisoDuplicadoItem} numberOfLines={3}>
+                {elegida ? '✔ ' : '• '}
+                {m.nombre}
+                {m.presentacion ? ` — ${m.presentacion}` : ''} · FV: {fvBonito(m.vencimiento)} ·{' '}
+                {m.cantidad ?? 0} u.
+                {m.activo === false ? ' · INACTIVO' : ''}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+        {vigente ? (
+          <Text style={styles.avisoDuplicadoExplica}>
+            {fusion.activo
+              ? cantValida
+                ? `Se sumará a las ${fusion.cantidad} unidades actuales: ${fusion.cantidad} + ${cantNueva} = ${fusion.cantidad + cantNueva}.`
+                : `Escribe la cantidad que llegó. Se sumará a las ${fusion.cantidad} unidades actuales.`
+              : cantValida
+                ? `Estaba inactivo. Se reactivará con ${cantNueva} unidades.`
+                : 'Estaba inactivo. Escribe la cantidad que llegó: se reactivará con esa cantidad.'}
           </Text>
-        ))}
-        <Text style={styles.avisoDuplicadoPie}>
-          Si es el mismo con otra cantidad, edítalo o reactívalo en vez de crear uno nuevo.
-        </Text>
+        ) : (
+          <Text style={styles.avisoDuplicadoPie}>
+            Si ninguno es el mismo (otro lote o presentación), sigue y se guardará como nuevo.
+          </Text>
+        )}
       </View>
     );
   };
@@ -1108,6 +1296,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
       vencimiento: '',
       ubicacion: '',
     });
+    setFusionManual(null);
     setManualImageUri(null);
     setManualImageBase64(null);
     manualImageBase64Ref.current = null;
@@ -1245,7 +1434,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
               </TouchableOpacity>
             </View>
           </View>
-          {renderCoincidencias(coincidenciasFoto)}
+          {renderCoincidencias(coincidenciasFoto, false)}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Presentación</Text>
             <TextInput
@@ -1523,7 +1712,7 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni marcas de markdown.`;
                   </TouchableOpacity>
                 </View>
 
-                {renderCoincidencias(coincidenciasManual)}
+                {renderCoincidencias(coincidenciasManual, true)}
                 <Text style={styles.label}>Presentación</Text>
                 <TextInput
                   style={styles.input}
@@ -1756,6 +1945,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   avisoDuplicadoTitulo: { fontSize: 13, fontWeight: '700', color: '#92400E', marginBottom: 4 },
+  avisoDuplicadoFila: { paddingVertical: 6, paddingHorizontal: 6, borderRadius: 6, marginBottom: 2 },
+  avisoDuplicadoFilaElegida: { backgroundColor: '#FDE68A', borderWidth: 1, borderColor: '#D97706' },
+  avisoDuplicadoExplica: { fontSize: 12, fontWeight: '700', color: '#78350F', marginTop: 6 },
   avisoDuplicadoItem: { fontSize: 12, color: '#78350F', marginBottom: 2 },
   avisoDuplicadoPie: { fontSize: 11, color: '#92400E', marginTop: 4, fontStyle: 'italic' },
   label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 5 },
